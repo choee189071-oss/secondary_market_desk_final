@@ -121,7 +121,7 @@ def _focused_watchlist_markdown(saved_df: pd.DataFrame, issuer: str) -> str:
 def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer: str):
     section_anchor("workflow-cusip-drilldown", "CUSIP Drilldown")
     st.markdown(
-        "<div class='focus-band'>Security-level workflow: choose one CUSIP, review detail metrics, inspect trade path, then compare same-bucket peers.</div>",
+        "<div class='focus-band'><b>CUSIP evidence:</b> metrics, path, peers.</div>",
         unsafe_allow_html=True,
     )
     summary = _build_workflow_cusip_summary(issuer_trades)
@@ -205,15 +205,15 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
 
     st.subheader("Analyst Read-Through")
     readthrough = [
-        f"{selected_cusip} has {len(detail):,} trade observation(s) in the current issuer/filter.",
-        f"Latest spread screens at {_fmt_bps(selected_row.get('current_spread_bps'))}; liquidity score is {_fmt_num(selected_row.get('liquidity_score'))}.",
-        f"Trade flow proxy: {buy_count:,} buy, {sell_count:,} sell, {other_count:,} other/unknown trade(s).",
+        f"{len(detail):,} trades in current filter.",
+        f"Spread {_fmt_bps(selected_row.get('current_spread_bps'))}; liquidity {_fmt_num(selected_row.get('liquidity_score'))}.",
+        f"Flow: {buy_count:,} buy / {sell_count:,} sell / {other_count:,} other.",
     ]
     if pd.notna(spread_change):
-        readthrough.append(f"Observed spread path moved {_fmt_bps(spread_change)} from first to latest trade in the selected window.")
+        readthrough.append(f"Path change: {_fmt_bps(spread_change)}.")
     bucket = selected_row.get("maturity_bucket") if "maturity_bucket" in summary.columns else None
     if pd.notna(bucket):
-        readthrough.append(f"Same-bucket comparison uses {bucket} peers from the selected issuer universe.")
+        readthrough.append(f"Peer bucket: {bucket}.")
     for line in readthrough:
         st.markdown(f"- {line}")
 
@@ -229,7 +229,7 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
             placeholder="Why this CUSIP is worth saving, what to verify, or how to frame it in the report.",
         )
     with action_col:
-        st.caption("Save this CUSIP with the note so it carries into RV / Watchlist exports.")
+        st.caption("Save for watchlist/export.")
         if st.button("Save / Update Watchlist", key=f"save_watch_{selected_cusip}"):
             _upsert_focused_watchlist(selected_cusip, selected_issuer, "CUSIP Drilldown", selected_row, watch_note)
             st.success(f"Saved {selected_cusip} to watchlist.")
@@ -343,7 +343,7 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
 def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: str):
     section_anchor("workflow-rv-watchlist", "RV / Watchlist")
     st.markdown(
-        "<div class='focus-band'>Ranking page for candidate discovery. Save CUSIPs during the session, then export the shortlist.</div>",
+        "<div class='focus-band'><b>Rank:</b> filter, save, export.</div>",
         unsafe_allow_html=True,
     )
     summary = _build_workflow_cusip_summary(issuer_trades)
@@ -407,7 +407,7 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
             clean_metric_card("Top Liquidity", _fmt_num(ranked["liquidity_score"].max()), size="small")
         with r4:
             clean_metric_card("Median Peer Gap", _fmt_bps(ranked["peer_median_gap_bps"].median()), size="small")
-        st.caption("Top 10 candidates. Expand for the broader ranked list.")
+        st.caption("Top 10. Expand for more.")
         safe_dataframe(ranked[[c for c in display_cols if c in ranked.columns]].head(10), hide_index=True, auto_collapse=False)
         with st.expander("Full opportunity ranking preview", expanded=False):
             safe_dataframe(ranked[[c for c in display_cols if c in ranked.columns]].head(50), hide_index=True)
@@ -442,7 +442,7 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
     if saved.empty:
         st.info("No saved CUSIPs yet.")
     else:
-        st.caption(f"{len(saved):,} saved candidate(s). Notes are stored in this Streamlit session.")
+        st.caption(f"{len(saved):,} saved.")
         saved_display_cols = [
             "cusip", "issuer", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
             "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",

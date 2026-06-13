@@ -67,7 +67,9 @@ Use `LADWP.xlsx + mmd.csv` as the working golden sample when validating methodol
 The default experience is intentionally focused:
 
 - Keep the six-step workflow as the daily path.
-- Show conclusions, next actions, and key metrics before raw tables.
+- Use short indications instead of long explanatory copy.
+- Put charts before raw tables wherever possible.
+- Show conclusions, next actions, and key metrics before data tables.
 - Keep detailed audit tables, methodology evidence, and large ranking tables inside expanders.
 - Render only the chart modules the analyst selects.
 - Keep the legacy dashboard available for deep audits, but do not make it the default reading path.

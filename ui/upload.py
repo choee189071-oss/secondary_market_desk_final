@@ -44,7 +44,7 @@ def render_upload_file_cards(
             "kicker": "Required",
             "title": "Trade files",
             "value": f"{trade_count:,} selected" if trade_count else "No trade file selected",
-            "detail": ", ".join(trade_file_names[:3]) + (" ..." if trade_count > 3 else "") if trade_count else "Upload at least one MuniPro trade-history export.",
+            "detail": ", ".join(trade_file_names[:2]) + (" ..." if trade_count > 2 else "") if trade_count else "Required.",
         },
         {
             "class_name": "file-card",
@@ -52,7 +52,7 @@ def render_upload_file_cards(
             "kicker": "Optional",
             "title": "Bond reference",
             "value": bond_file_name or "Not uploaded",
-            "detail": "Adds call, tax, lien, and static security metadata when available.",
+            "detail": "Security metadata.",
         },
         {
             "class_name": "file-card",
@@ -60,7 +60,7 @@ def render_upload_file_cards(
             "kicker": "Optional",
             "title": "Issuer mapping",
             "value": issuer_mapping_file_name or "Not uploaded",
-            "detail": "Adds persistent issuer/sector labels instead of manual overrides.",
+            "detail": "Issuer / sector labels.",
         },
         {
             "class_name": "file-card",
@@ -68,7 +68,7 @@ def render_upload_file_cards(
             "kicker": "Optional benchmark",
             "title": "MMD / AAA curve",
             "value": mmd_file_name or ("Fallback enabled; no file selected" if use_external_mmd_fallback else "Fallback disabled"),
-            "detail": "Uploaded MMD is treated as the AAA curve only when it is the active fallback benchmark.",
+            "detail": "AAA fallback curve.",
         },
     ]
     _render_card_grid(cards, "file-card-grid")
@@ -188,19 +188,19 @@ def build_upload_audit_cards(
     if blocking:
         ready_status = "bad"
         ready_value = "Not ready"
-        next_step = "Stay on Upload / Data Audit and fix blocking fields before analysis."
+        next_step = "Fix blocking fields."
     elif benchmark_missing:
         ready_status = "warn"
-        ready_value = "Ready for yield/liquidity only"
-        next_step = "Go to Desk Snapshot for basic review, but add Index Rate or enable MMD fallback before relying on spread/RV outputs."
+        ready_value = "Yield / liquidity only"
+        next_step = "Add benchmark for spread/RV."
     elif any(c["status"] == "warn" for c in cards):
         ready_status = "warn"
         ready_value = "Ready with warnings"
-        next_step = "Go to Desk Snapshot, then review warnings before using CUSIP/RV outputs."
+        next_step = "Snapshot next; review warnings."
     else:
         ready_status = "good"
         ready_value = "Ready to analyze"
-        next_step = "Next step: open Desk Snapshot."
+        next_step = "Open Desk Snapshot."
 
     readiness = {
         "status": ready_status,
@@ -221,7 +221,7 @@ def render_ready_to_analyze_card(readiness: dict):
   <div class="card-kicker">Ready to Analyze</div>
   <div class="card-title">{_html_escape(readiness.get('value', 'Review upload'))}</div>
   <div class="card-value">{_html_escape(readiness.get('next_step', 'Review the audit cards above.'))}</div>
-  <div class="card-detail">Warnings: {_html_escape(readiness.get('warn_count', 0))} | Blocking issues: {_html_escape(readiness.get('bad_count', 0))}</div>
+  <div class="card-detail">Warn {_html_escape(readiness.get('warn_count', 0))} | Block {_html_escape(readiness.get('bad_count', 0))}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -248,7 +248,7 @@ def render_focused_upload_audit(
 ):
     section_anchor("workflow-upload-audit", "Upload / Data Audit")
     st.markdown(
-        "<div class='focus-band'>Start here. Confirm files, row counts, field mapping, date coverage, benchmark source, and blocking issues before reading any charts.</div>",
+        "<div class='focus-band'><b>Check:</b> files, dates, CUSIP, benchmark.</div>",
         unsafe_allow_html=True,
     )
 

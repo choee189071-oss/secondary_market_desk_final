@@ -26,7 +26,7 @@ def render_focused_core_charts(
 ):
     section_anchor("workflow-core-charts", "Core Charts")
     st.markdown(
-        "<div class='focus-band'>Core visual analysis only: spread trend, yield trend, trading volume, and maturity-year curve. Use this page when you want charts without the long audit/admin sections.</div>",
+        "<div class='focus-band'><b>Chart-first:</b> pick only the visuals needed.</div>",
         unsafe_allow_html=True,
     )
     if market_df.empty or "issuer" not in market_df.columns:
@@ -100,7 +100,7 @@ def render_focused_core_charts(
         ["Spread Trend", "Volume & Activity", "Issuer Curve"],
         default=["Spread Trend"],
         key="focused_core_visible_charts",
-        help="Keep the default short while reviewing. Add volume or curve only when that evidence is needed.",
+        help="Default is short. Add modules as needed.",
     )
 
     freq_map = {"Daily": "D", "Weekly": "W", "Monthly": "M"}

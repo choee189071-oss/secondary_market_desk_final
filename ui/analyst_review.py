@@ -48,7 +48,7 @@ def render_analyst_review_mode(context: dict, selected_issuer: str, safe_datafra
     """Render analyst validation workflow and return current review table."""
     st.subheader("Analyst Review Mode")
     st.markdown(
-        "<div class='focus-band'>Use this during professional review. Mark whether key outputs are correct, capture the expected values analysts approve, and export the feedback for regression locking.</div>",
+        "<div class='focus-band'><b>Lock:</b> status, expected value, note.</div>",
         unsafe_allow_html=True,
     )
 

@@ -206,7 +206,7 @@ def render_focused_snapshot(
 ):
     section_anchor("workflow-desk-snapshot", "Desk Snapshot")
     st.markdown(
-        "<div class='focus-band'>Decision-first view. Read this before opening detailed charts: coverage, current spread, liquidity, and the strongest CUSIP candidates.</div>",
+        "<div class='focus-band'><b>Read first:</b> issuer signal, top names, warnings.</div>",
         unsafe_allow_html=True,
     )
     issuer_base = _add_workflow_spread_bps(issuer_trades)
@@ -245,7 +245,7 @@ def render_focused_snapshot(
     )
     for bullet in bullets:
         st.markdown(f"- {bullet}")
-    st.info("Next: open Core Charts to validate the signal visually, then use CUSIP Drilldown for the top candidate.")
+    st.caption("Next: Core Charts -> CUSIP Drilldown.")
 
     if not cusip_summary.empty:
         st.subheader("Top Opportunities")
@@ -293,11 +293,11 @@ def render_focused_snapshot(
     warn_count = sum(1 for card in warning_cards if card["status"] == "warn")
     bad_count = sum(1 for card in warning_cards if card["status"] == "bad")
     if bad_count:
-        st.error(f"Methodology check has {bad_count} blocking issue(s) and {warn_count} warning(s). Open details before using outputs.")
+        st.error(f"Methodology: {bad_count} block / {warn_count} warn.")
     elif warn_count:
-        st.warning(f"Methodology check has {warn_count} warning(s). Open details before sending the report.")
+        st.warning(f"Methodology: {warn_count} warn.")
     else:
-        st.success("Methodology check is clear for the current focused workflow.")
+        st.success("Methodology: clear.")
 
     with st.expander("Methodology warning cards", expanded=bad_count > 0):
         _render_card_grid(warning_cards, "status-card-grid")

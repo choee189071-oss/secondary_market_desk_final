@@ -37,7 +37,7 @@ def render_focused_export_methodology(
 ):
     section_anchor("workflow-export-methodology", "Export / Methodology")
     st.markdown(
-        "<div class='focus-band'>Review center. Confirm analyst review items, package the report, and keep methodology evidence available without crowding the default view.</div>",
+        "<div class='focus-band'><b>Review center:</b> approve, export, audit on demand.</div>",
         unsafe_allow_html=True,
     )
 

@@ -515,9 +515,12 @@ div[data-testid="stMetric"] {
 .focus-band {
     background: #f8fafc;
     border: 1px solid #dbe3ee;
-    border-radius: 14px;
-    padding: 16px 18px;
-    margin: 12px 0 18px 0;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 8px 0 12px 0;
+    color: #334155;
+    font-size: 0.9rem;
+    line-height: 1.35;
 }
 
 .methodology-note {
@@ -1387,28 +1390,22 @@ def clean_metric_card(label: str, value: object, size: str = "large", note: str 
 
 WORKFLOW_GUIDANCE = {
     "1. Upload / Data Audit": {
-        "focus": "Confirm files, field mapping, date coverage, CUSIP quality, and benchmark source before trusting any output.",
-        "output": "Ready-to-analyze status plus any upload or benchmark warnings.",
+        "focus": "Inputs + benchmark",
     },
     "2. Desk Snapshot": {
-        "focus": "Read the issuer-level conclusion first: rows, dates, median spread, liquidity, top candidate, and warnings.",
-        "output": "Executive desk snapshot and top five opportunities.",
+        "focus": "Conclusion + top names",
     },
     "3. Core Charts": {
-        "focus": "Use spread trend, activity, and issuer curve to check whether the signal is broad, liquid, and benchmark-supported.",
-        "output": "Chart-backed evidence for spread, volume, and curve positioning.",
+        "focus": "Visual evidence",
     },
     "4. CUSIP Drilldown": {
-        "focus": "Validate a selected bond through security detail, trade path, same-bucket peers, and benchmark audit.",
-        "output": "CUSIP-level read-through and evidence for saving or rejecting a candidate.",
+        "focus": "Security evidence",
     },
     "5. RV / Watchlist": {
-        "focus": "Rank opportunities, save candidates, add notes, and separate actionable names from noisy screens.",
-        "output": "Saved candidate list with analyst notes.",
+        "focus": "Rank + save",
     },
     "6. Export / Methodology": {
-        "focus": "Package the snapshot, watchlist, methodology, trust layer, and analyst review into shareable outputs.",
-        "output": "Markdown, HTML, PDF, PPTX, bundle, review CSV/JSON, and methodology appendix.",
+        "focus": "Review + export",
     },
 }
 
@@ -1421,16 +1418,13 @@ def _workflow_guidance_html(active_label: str, files_loaded: int, issuers_loaded
     except ValueError:
         next_label = "Upload / Data Audit"
     data_status = (
-        f"{files_loaded:,} file(s) loaded across {issuers_loaded:,} issuer(s)."
+        f"{files_loaded:,} files / {issuers_loaded:,} issuers"
         if files_loaded
-        else "No trade file loaded yet."
+        else "No file"
     )
     return f"""
 <div class='focus-band'>
-  <b>Current focus:</b> {current['focus']}<br>
-  <b>Data status:</b> {data_status}<br>
-  <b>Next step:</b> {next_label}<br>
-  <b>Output from this page:</b> {current['output']}
+  <b>Focus:</b> {current['focus']} &nbsp; | &nbsp; <b>Status:</b> {data_status} &nbsp; | &nbsp; <b>Next:</b> {next_label}
 </div>
 """
 
@@ -1849,7 +1843,7 @@ with st.expander(
     expanded=(workflow_view == "1. Upload / Data Audit"),
 ):
     st.markdown(
-        "<div class='focus-band'>Upload one or more MuniPro trade files here first. Optional reference files can enrich the analysis, but the trade file is the only required input.</div>",
+        "<div class='focus-band'><b>Input:</b> trade files required; reference files optional.</div>",
         unsafe_allow_html=True,
     )
     upload_col1, upload_col2 = st.columns([1.15, 0.85])
