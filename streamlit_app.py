@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import io
 import json
 import re
@@ -448,14 +449,135 @@ div[data-testid="stMetric"] {
     color: #4f3b05;
 }
 
+.file-card-grid,
+.status-card-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 12px 0 20px 0;
+}
+
+.status-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.file-card,
+.status-card,
+.ready-card {
+    background: #ffffff;
+    border: 1px solid #dbe3ee;
+    border-left: 6px solid #94a3b8;
+    border-radius: 14px;
+    padding: 14px 16px;
+    min-height: 116px;
+}
+
+.ready-card {
+    margin: 12px 0 18px 0;
+    min-height: 0;
+}
+
+.status-good {
+    border-left-color: #15803d;
+    background: #f0fdf4;
+}
+
+.status-warn {
+    border-left-color: #ca8a04;
+    background: #fffbeb;
+}
+
+.status-bad {
+    border-left-color: #b91c1c;
+    background: #fef2f2;
+}
+
+.status-neutral {
+    border-left-color: #64748b;
+    background: #f8fafc;
+}
+
+.card-kicker {
+    color: #64748b;
+    font-size: 0.78rem;
+    font-weight: 780;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 7px;
+}
+
+.card-title {
+    color: #111827;
+    font-size: 1.02rem;
+    font-weight: 780;
+    line-height: 1.18;
+    margin-bottom: 7px;
+    overflow-wrap: anywhere;
+}
+
+.card-value {
+    color: #1f2937;
+    font-size: 0.94rem;
+    font-weight: 650;
+    line-height: 1.35;
+    margin-bottom: 7px;
+    overflow-wrap: anywhere;
+}
+
+.card-detail {
+    color: #64748b;
+    font-size: 0.85rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.status-pill {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 0.76rem;
+    font-weight: 780;
+    margin-bottom: 8px;
+}
+
+.status-good .status-pill {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.status-warn .status-pill {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.status-bad .status-pill {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.status-neutral .status-pill {
+    background: #e2e8f0;
+    color: #334155;
+}
+
 @media (max-width: 1200px) {
     .workflow-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .file-card-grid,
+    .status-card-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
 @media (max-width: 760px) {
     .workflow-grid {
+        grid-template-columns: repeat(1, minmax(0, 1fr));
+    }
+
+    .file-card-grid,
+    .status-card-grid {
         grid-template-columns: repeat(1, minmax(0, 1fr));
     }
 }
@@ -1403,6 +1525,265 @@ def clean_metric_card(label: str, value: object, size: str = "large", note: str 
     )
 
 
+def _html_escape(value: object) -> str:
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def _status_label(status: str) -> str:
+    return {
+        "good": "Green",
+        "warn": "Yellow",
+        "bad": "Red",
+        "neutral": "Info",
+    }.get(status, "Info")
+
+
+def _render_card_grid(cards: list[dict], grid_class: str):
+    parts = [f"<div class='{grid_class}'>"]
+    for card in cards:
+        status = card.get("status", "neutral")
+        parts.append(
+            f"""
+<div class="{card.get('class_name', 'status-card')} status-{_html_escape(status)}">
+  <div class="status-pill">{_html_escape(_status_label(status))}</div>
+  <div class="card-kicker">{_html_escape(card.get('kicker', ''))}</div>
+  <div class="card-title">{_html_escape(card.get('title', ''))}</div>
+  <div class="card-value">{_html_escape(card.get('value', ''))}</div>
+  <div class="card-detail">{_html_escape(card.get('detail', ''))}</div>
+</div>
+"""
+        )
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+def render_upload_file_cards(
+    trade_file_names: list[str],
+    bond_file_name: str | None,
+    issuer_mapping_file_name: str | None,
+    mmd_file_name: str | None,
+    use_external_mmd_fallback: bool,
+):
+    """Show selected upload files as role-based cards before the heavier audit."""
+    trade_count = len(trade_file_names)
+    cards = [
+        {
+            "class_name": "file-card",
+            "status": "good" if trade_count else "bad",
+            "kicker": "Required",
+            "title": "Trade files",
+            "value": f"{trade_count:,} selected" if trade_count else "No trade file selected",
+            "detail": ", ".join(trade_file_names[:3]) + (" ..." if trade_count > 3 else "") if trade_count else "Upload at least one MuniPro trade-history export.",
+        },
+        {
+            "class_name": "file-card",
+            "status": "good" if bond_file_name else "neutral",
+            "kicker": "Optional",
+            "title": "Bond reference",
+            "value": bond_file_name or "Not uploaded",
+            "detail": "Adds call, tax, lien, and static security metadata when available.",
+        },
+        {
+            "class_name": "file-card",
+            "status": "good" if issuer_mapping_file_name else "neutral",
+            "kicker": "Optional",
+            "title": "Issuer mapping",
+            "value": issuer_mapping_file_name or "Not uploaded",
+            "detail": "Adds persistent issuer/sector labels instead of manual overrides.",
+        },
+        {
+            "class_name": "file-card",
+            "status": "good" if mmd_file_name else ("warn" if use_external_mmd_fallback else "neutral"),
+            "kicker": "Optional benchmark",
+            "title": "MMD / AAA curve",
+            "value": mmd_file_name or ("Fallback enabled; no file selected" if use_external_mmd_fallback else "Fallback disabled"),
+            "detail": "Uploaded MMD is treated as the AAA curve only when it is the active fallback benchmark.",
+        },
+    ]
+    _render_card_grid(cards, "file-card-grid")
+
+
+def _nonnull_rate(df: pd.DataFrame, col: str) -> float | None:
+    if df.empty or col not in df.columns or len(df) == 0:
+        return None
+    series = df[col]
+    if series.dtype == object:
+        valid = series.notna() & (series.astype(str).str.strip() != "")
+    else:
+        valid = series.notna()
+    return float(valid.mean() * 100)
+
+
+def _numeric_rate(df: pd.DataFrame, col: str) -> float | None:
+    if df.empty or col not in df.columns or len(df) == 0:
+        return None
+    return float(pd.to_numeric(df[col], errors="coerce").notna().mean() * 100)
+
+
+def _rate_status(rate: float | None, good_threshold: float = 95, warn_threshold: float = 80) -> str:
+    if rate is None:
+        return "bad"
+    if rate >= good_threshold:
+        return "good"
+    if rate >= warn_threshold:
+        return "warn"
+    return "bad"
+
+
+def build_upload_audit_cards(
+    trade_reports: list[dict],
+    market_df: pd.DataFrame,
+    benchmark_source_mode: str,
+    use_external_mmd_fallback: bool,
+    mmd_file_provided: bool,
+) -> tuple[list[dict], dict]:
+    """Return red/yellow/green audit cards and a compact readiness summary."""
+    required_ok = bool(trade_reports) and all(report.get("can_run") for report in trade_reports)
+    required_missing = sorted(
+        {
+            missing
+            for report in trade_reports
+            for missing in report.get("missing_required", [])
+        }
+    )
+
+    trade_date_rate = _nonnull_rate(market_df, "trade_date")
+    dates = pd.to_datetime(market_df["trade_date"], errors="coerce").dropna() if "trade_date" in market_df.columns else pd.Series(dtype="datetime64[ns]")
+    if dates.empty:
+        date_status = "bad"
+        date_value = "No valid trade dates"
+        date_detail = "Trade date is required for time-series charts and snapshot period filters."
+    else:
+        unique_dates = dates.dt.normalize().nunique()
+        date_status = "good" if trade_date_rate and trade_date_rate >= 95 and unique_dates >= 2 else "warn"
+        date_value = f"{dates.min():%m/%d/%Y} - {dates.max():%m/%d/%Y}"
+        date_detail = f"{trade_date_rate:.1f}% valid date rows across {unique_dates:,} unique date(s)."
+
+    cusip_rate = _nonnull_rate(market_df, "cusip")
+    cusip_status = _rate_status(cusip_rate, good_threshold=95, warn_threshold=80)
+
+    yield_rate = _numeric_rate(market_df, "yield")
+    index_rate = _numeric_rate(market_df, "index_rate")
+    spread_rate = _numeric_rate(market_df, "spread")
+    yield_status = _rate_status(yield_rate, good_threshold=90, warn_threshold=70)
+
+    best_benchmark_input_rate = max([x for x in [index_rate, spread_rate] if x is not None], default=0)
+    if benchmark_source_mode in {"Trade Sheet Index / Index Rate", "Uploaded MMD fallback"}:
+        benchmark_status = "good"
+    elif use_external_mmd_fallback and not mmd_file_provided:
+        benchmark_status = "warn"
+    else:
+        benchmark_status = "bad"
+
+    if benchmark_source_mode == "Trade Sheet Index / Index Rate":
+        benchmark_value = "Trade sheet Index / Index Rate"
+        benchmark_detail = "Primary benchmark is active. External MMD is not mixed into this run."
+    elif benchmark_source_mode == "Uploaded MMD fallback":
+        benchmark_value = "Uploaded MMD fallback"
+        benchmark_detail = "Uploaded MMD is active as the AAA benchmark because trade index data was unavailable."
+    else:
+        benchmark_value = "No active benchmark"
+        benchmark_detail = "Yield/liquidity analytics can run, but spread-to-benchmark views are degraded."
+
+    if yield_status == "bad":
+        spread_input_status = "bad"
+    elif best_benchmark_input_rate >= 70:
+        spread_input_status = "good"
+    elif benchmark_status == "good":
+        spread_input_status = "warn"
+    else:
+        spread_input_status = "bad"
+
+    cards = [
+        {
+            "status": "good" if required_ok else "bad",
+            "kicker": "Required fields",
+            "title": "Minimum schema",
+            "value": "Pass" if required_ok else "Blocking issue",
+            "detail": "All required trade fields were detected." if required_ok else "Missing: " + ", ".join(required_missing),
+        },
+        {
+            "status": date_status,
+            "kicker": "Date coverage",
+            "title": "Trade date window",
+            "value": date_value,
+            "detail": date_detail,
+        },
+        {
+            "status": cusip_status,
+            "kicker": "CUSIP quality",
+            "title": "Valid CUSIP rate",
+            "value": "N/A" if cusip_rate is None else f"{cusip_rate:.1f}%",
+            "detail": "CUSIP-level drilldown and watchlist depend on this field.",
+        },
+        {
+            "status": benchmark_status,
+            "kicker": "Benchmark source",
+            "title": "Active curve policy",
+            "value": benchmark_value,
+            "detail": benchmark_detail,
+        },
+        {
+            "status": yield_status,
+            "kicker": "Yield availability",
+            "title": "Numeric yield rows",
+            "value": "N/A" if yield_rate is None else f"{yield_rate:.1f}%",
+            "detail": "Yield is required for spread, curve, and RV calculations.",
+        },
+        {
+            "status": spread_input_status,
+            "kicker": "Spread inputs",
+            "title": "Index Rate / Spread",
+            "value": f"Index {index_rate or 0:.1f}% / Spread {spread_rate or 0:.1f}%",
+            "detail": "Trade Index Rate is preferred; uploaded MMD can fill the benchmark role only as fallback.",
+        },
+    ]
+
+    blocking = [c for c in cards if c["status"] == "bad" and c["kicker"] in {"Required fields", "Date coverage", "Yield availability"}]
+    benchmark_missing = benchmark_status == "bad"
+    if blocking:
+        ready_status = "bad"
+        ready_value = "Not ready"
+        next_step = "Stay on Upload / Data Audit and fix blocking fields before analysis."
+    elif benchmark_missing:
+        ready_status = "warn"
+        ready_value = "Ready for yield/liquidity only"
+        next_step = "Go to Desk Snapshot for basic review, but add Index Rate or enable MMD fallback before relying on spread/RV outputs."
+    elif any(c["status"] == "warn" for c in cards):
+        ready_status = "warn"
+        ready_value = "Ready with warnings"
+        next_step = "Go to Desk Snapshot, then review warnings before using CUSIP/RV outputs."
+    else:
+        ready_status = "good"
+        ready_value = "Ready to analyze"
+        next_step = "Next step: open Desk Snapshot."
+
+    readiness = {
+        "status": ready_status,
+        "value": ready_value,
+        "next_step": next_step,
+        "bad_count": sum(1 for c in cards if c["status"] == "bad"),
+        "warn_count": sum(1 for c in cards if c["status"] == "warn"),
+    }
+    return cards, readiness
+
+
+def render_ready_to_analyze_card(readiness: dict):
+    status = readiness.get("status", "neutral")
+    st.markdown(
+        f"""
+<div class="ready-card status-{_html_escape(status)}">
+  <div class="status-pill">{_html_escape(_status_label(status))}</div>
+  <div class="card-kicker">Ready to Analyze</div>
+  <div class="card-title">{_html_escape(readiness.get('value', 'Review upload'))}</div>
+  <div class="card-value">{_html_escape(readiness.get('next_step', 'Review the audit cards above.'))}</div>
+  <div class="card-detail">Warnings: {_html_escape(readiness.get('warn_count', 0))} | Blocking issues: {_html_escape(readiness.get('bad_count', 0))}</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def render_workflow_header(active_label: str, files_loaded: int = 0, issuers_loaded: int = 0):
     """Render the six-step workstation flow as a compact visual map."""
     html_parts = ["<div class='workflow-grid'>"]
@@ -1560,6 +1941,8 @@ def render_focused_upload_audit(
     benchmark_source_mode: str,
     benchmark_priority: str,
     benchmark_conflict_policy: str,
+    use_external_mmd_fallback: bool,
+    mmd_file_provided: bool,
 ):
     section_anchor("workflow-upload-audit", "Upload / Data Audit")
     st.markdown(
@@ -1578,6 +1961,18 @@ def render_focused_upload_audit(
         clean_metric_card("CUSIPs", f"{market_df['cusip'].nunique() if 'cusip' in market_df.columns else 0:,}", size="small")
     with c5:
         clean_metric_card("Duplicates Removed", f"{duplicates_removed:,}", size="small")
+
+    audit_cards, readiness = build_upload_audit_cards(
+        trade_reports=trade_reports,
+        market_df=market_df,
+        benchmark_source_mode=benchmark_source_mode,
+        use_external_mmd_fallback=use_external_mmd_fallback,
+        mmd_file_provided=mmd_file_provided,
+    )
+    render_ready_to_analyze_card(readiness)
+
+    st.subheader("Data Audit Status")
+    _render_card_grid(audit_cards, "status-card-grid")
 
     audit_rows = []
     for report in trade_reports:
@@ -1626,6 +2021,17 @@ def render_focused_upload_audit(
     ]
     st.subheader("Data Coverage")
     safe_dataframe(pd.DataFrame(coverage_rows), width="stretch", hide_index=True, auto_collapse=False)
+
+    st.subheader("Benchmark Priority / MMD Logic")
+    mmd_logic_rows = [
+        {"Policy Item": "Uploaded MMD role", "Current Setting": "AAA benchmark curve when external MMD fallback is active"},
+        {"Policy Item": "Benchmark priority", "Current Setting": "Trade Sheet Index / Index Rate first; uploaded MMD fallback second"},
+        {"Policy Item": "External MMD fallback toggle", "Current Setting": "Enabled" if use_external_mmd_fallback else "Disabled"},
+        {"Policy Item": "MMD file provided", "Current Setting": "Yes" if mmd_file_provided else "No"},
+        {"Policy Item": "Active benchmark source", "Current Setting": benchmark_source_mode},
+        {"Policy Item": "Mixing policy", "Current Setting": "Never mix trade-sheet index rates and uploaded MMD in the same run"},
+    ]
+    safe_dataframe(pd.DataFrame(mmd_logic_rows), width="stretch", hide_index=True, auto_collapse=False)
 
     st.subheader("Fixed Benchmark / Methodology Audit")
     _render_benchmark_methodology_block(mmd_df, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
@@ -1953,12 +2359,15 @@ def render_focused_workflow(
     benchmark_source_mode: str,
     benchmark_priority: str,
     benchmark_conflict_policy: str,
+    use_external_mmd_fallback: bool,
+    mmd_file_provided: bool,
 ):
     render_workflow_header(workflow_view, files_loaded=len(trade_payloads), issuers_loaded=len(uploaded_issuers))
     if workflow_view == "1. Upload / Data Audit":
         render_focused_upload_audit(
             trade_reports, bond_report, mmd_report, market_df, bonds_df, issuer_master, mmd_df,
-            trade_payloads, failed_files, duplicates_removed, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy,
+            trade_payloads, failed_files, duplicates_removed, benchmark_source_mode, benchmark_priority,
+            benchmark_conflict_policy, use_external_mmd_fallback, mmd_file_provided,
         )
     elif workflow_view == "2. Desk Snapshot":
         render_focused_snapshot(market_df, bonds_df, issuer_trades, issuer_bonds, selected_issuer, selected_sector, benchmark_source_mode)
@@ -3535,6 +3944,14 @@ with st.expander(
         if not use_external_mmd_fallback:
             st.caption("External MMD loading is off. This avoids benchmark-source conflict and protects memory.")
 
+    render_upload_file_cards(
+        trade_file_names=[f.name for f in trade_files] if trade_files else [],
+        bond_file_name=bond_file.name if bond_file else None,
+        issuer_mapping_file_name=issuer_mapping_file.name if issuer_mapping_file else None,
+        mmd_file_name=mmd_file.name if mmd_file else None,
+        use_external_mmd_fallback=use_external_mmd_fallback,
+    )
+
     with st.expander("Download blank templates", expanded=False):
         template_download_button(TRADE_REQUIRED + TRADE_RECOMMENDED + TRADE_OPTIONAL, "Trade template CSV", "trade_history_template.csv")
         template_download_button(BOND_REQUIRED + BOND_RECOMMENDED + BOND_OPTIONAL, "Optional bond reference template CSV", "bond_reference_template.csv")
@@ -4109,6 +4526,8 @@ if workflow_view != FULL_DASHBOARD_LABEL:
         benchmark_source_mode=benchmark_source_mode,
         benchmark_priority=benchmark_priority,
         benchmark_conflict_policy=benchmark_conflict_policy,
+        use_external_mmd_fallback=use_external_mmd_fallback,
+        mmd_file_provided=mmd_payload is not None,
     )
     st.stop()
 
