@@ -389,6 +389,77 @@ div[data-testid="stMetric"] {
     text-decoration: underline;
 }
 
+.workflow-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 12px;
+    margin: 18px 0 22px 0;
+}
+
+.workflow-step {
+    background: #ffffff;
+    border: 1px solid #dbe3ee;
+    border-radius: 14px;
+    padding: 14px 14px 12px 14px;
+    min-height: 112px;
+}
+
+.workflow-step-active {
+    border-color: #277568;
+    background: #eef8f5;
+    box-shadow: inset 0 0 0 1px rgba(39, 117, 104, 0.18);
+}
+
+.workflow-step-num {
+    color: #64748b;
+    font-size: 0.78rem;
+    font-weight: 750;
+    margin-bottom: 8px;
+}
+
+.workflow-step-title {
+    color: #111827;
+    font-size: 0.98rem;
+    font-weight: 780;
+    line-height: 1.18;
+    margin-bottom: 8px;
+}
+
+.workflow-step-note {
+    color: #64748b;
+    font-size: 0.84rem;
+    line-height: 1.28;
+}
+
+.focus-band {
+    background: #f8fafc;
+    border: 1px solid #dbe3ee;
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin: 12px 0 18px 0;
+}
+
+.methodology-note {
+    background: #fffdf4;
+    border: 1px solid #f5d36b;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin: 10px 0;
+    color: #4f3b05;
+}
+
+@media (max-width: 1200px) {
+    .workflow-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 760px) {
+    .workflow-grid {
+        grid-template-columns: repeat(1, minmax(0, 1fr));
+    }
+}
+
 .sidebar-nav-small {
     font-size: 0.88rem;
     line-height: 1.55;
@@ -422,6 +493,47 @@ ENABLE_REPORT_EXPORTS = False
 TABLE_PREVIEW_ROWS = 500
 LARGE_TABLE_ROW_THRESHOLD = 8
 LARGE_TABLE_COL_THRESHOLD = 8
+
+WORKFLOW_STEPS = [
+    {
+        "label": "1. Upload / Data Audit",
+        "short": "Upload / Audit",
+        "title": "Upload / Data Audit",
+        "note": "Files, fields, row counts, benchmark source.",
+    },
+    {
+        "label": "2. Desk Snapshot",
+        "short": "Snapshot",
+        "title": "Desk Snapshot",
+        "note": "Issuer, dates, spread, liquidity, top signals.",
+    },
+    {
+        "label": "3. Core Charts",
+        "short": "Charts",
+        "title": "Core Charts",
+        "note": "Spread, yield, volume, issuer curve.",
+    },
+    {
+        "label": "4. CUSIP Drilldown",
+        "short": "CUSIP",
+        "title": "CUSIP Drilldown",
+        "note": "Security detail, trade path, same-bucket peers.",
+    },
+    {
+        "label": "5. RV / Watchlist",
+        "short": "RV / Watchlist",
+        "title": "RV / Watchlist",
+        "note": "Opportunity ranking, saved candidates.",
+    },
+    {
+        "label": "6. Export / Methodology",
+        "short": "Export",
+        "title": "Export / Methodology",
+        "note": "Reports, downloads, assumptions, benchmark audit.",
+    },
+]
+WORKFLOW_LABELS = [step["label"] for step in WORKFLOW_STEPS]
+FULL_DASHBOARD_LABEL = "Full Dashboard"
 
 
 # =========================
@@ -1289,6 +1401,578 @@ def clean_metric_card(label: str, value: object, size: str = "large", note: str 
 """,
         unsafe_allow_html=True,
     )
+
+
+def render_workflow_header(active_label: str, files_loaded: int = 0, issuers_loaded: int = 0):
+    """Render the six-step workstation flow as a compact visual map."""
+    html_parts = ["<div class='workflow-grid'>"]
+    for idx, step in enumerate(WORKFLOW_STEPS, start=1):
+        active_class = " workflow-step-active" if step["label"] == active_label else ""
+        if idx == 1 and files_loaded:
+            note = f"{files_loaded:,} file(s); {issuers_loaded:,} issuer(s)."
+        elif idx == 2 and issuers_loaded:
+            note = "Ready after issuer selection."
+        else:
+            note = step["note"]
+        html_parts.append(
+            f"""
+<div class='workflow-step{active_class}'>
+  <div class='workflow-step-num'>{idx:02d}</div>
+  <div class='workflow-step-title'>{step['title']}</div>
+  <div class='workflow-step-note'>{note}</div>
+</div>
+"""
+        )
+    html_parts.append("</div>")
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def _add_workflow_spread_bps(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a best-effort spread_bps column for focused workflow charts."""
+    out = df.copy()
+    if out.empty:
+        out["spread_bps"] = pd.Series(dtype="float64")
+        return out
+
+    if "spread_bps" in out.columns:
+        out["spread_bps"] = pd.to_numeric(out["spread_bps"], errors="coerce")
+        return out
+
+    if "spread" in out.columns and pd.to_numeric(out["spread"], errors="coerce").notna().any():
+        raw = pd.to_numeric(out["spread"], errors="coerce")
+        median_abs = raw.abs().dropna().median()
+        out["spread_bps"] = raw * 100 if pd.notna(median_abs) and median_abs <= 10 else raw
+    elif {"yield", "index_rate"}.issubset(out.columns):
+        out["spread_bps"] = (
+            pd.to_numeric(out["yield"], errors="coerce")
+            - pd.to_numeric(out["index_rate"], errors="coerce")
+        ) * 100
+    else:
+        out["spread_bps"] = pd.NA
+    return out
+
+
+def _workflow_date_range_text(df: pd.DataFrame) -> str:
+    if df.empty or "trade_date" not in df.columns:
+        return "No dates"
+    dates = pd.to_datetime(df["trade_date"], errors="coerce").dropna()
+    if dates.empty:
+        return "No dates"
+    return f"{dates.min():%m/%d/%Y} - {dates.max():%m/%d/%Y}"
+
+
+def _build_workflow_cusip_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Small deterministic CUSIP summary used by focused pages."""
+    if df.empty or "cusip" not in df.columns:
+        return pd.DataFrame()
+
+    base = _add_workflow_spread_bps(df.copy())
+    if "trade_date" in base.columns:
+        base["trade_date"] = pd.to_datetime(base["trade_date"], errors="coerce")
+    if "trade_amount" in base.columns:
+        base["trade_amount"] = pd.to_numeric(base["trade_amount"], errors="coerce").fillna(0)
+    else:
+        base["trade_amount"] = 0
+    if "yield" in base.columns:
+        base["yield"] = pd.to_numeric(base["yield"], errors="coerce")
+    if "price" in base.columns:
+        base["price"] = pd.to_numeric(base["price"], errors="coerce")
+
+    agg_spec = {
+        "trade_count": ("trade_date", "count") if "trade_date" in base.columns else ("cusip", "count"),
+        "total_trade_amount": ("trade_amount", "sum"),
+        "latest_trade": ("trade_date", "max") if "trade_date" in base.columns else ("cusip", "count"),
+        "current_spread_bps": ("spread_bps", "median"),
+    }
+    if "yield" in base.columns:
+        agg_spec["avg_yield"] = ("yield", "mean")
+    if "price" in base.columns:
+        agg_spec["avg_price"] = ("price", "mean")
+    if "maturity_bucket" in base.columns:
+        agg_spec["maturity_bucket"] = ("maturity_bucket", "first")
+
+    summary = base.groupby("cusip", dropna=False).agg(**agg_spec).reset_index()
+    if "latest_trade" in summary.columns:
+        latest_dates = pd.to_datetime(summary["latest_trade"], errors="coerce")
+        latest_anchor = pd.to_datetime(base.get("trade_date"), errors="coerce").max() if "trade_date" in base.columns else pd.Timestamp.today()
+        summary["days_since_last_trade"] = (latest_anchor - latest_dates).dt.days
+    else:
+        summary["days_since_last_trade"] = pd.NA
+
+    spread_rank = pd.to_numeric(summary["current_spread_bps"], errors="coerce").rank(pct=True)
+    count_rank = pd.to_numeric(summary["trade_count"], errors="coerce").rank(pct=True)
+    amount_rank = pd.to_numeric(summary["total_trade_amount"], errors="coerce").rank(pct=True)
+    recency_rank = (1 - pd.to_numeric(summary["days_since_last_trade"], errors="coerce").rank(pct=True)).fillna(0.5)
+    summary["liquidity_score"] = (count_rank * 35 + amount_rank * 35 + recency_rank * 30).round(1)
+    summary["rv_score"] = (spread_rank.fillna(0.5) * 55 + summary["liquidity_score"].rank(pct=True).fillna(0.5) * 45).round(1)
+    summary["signal"] = np.select(
+        [
+            (summary["rv_score"] >= 70) & (summary["liquidity_score"] >= 55),
+            summary["current_spread_bps"].fillna(-999) >= summary["current_spread_bps"].quantile(0.75),
+            summary["liquidity_score"] >= 70,
+        ],
+        ["Wide + Liquid", "Wide / Review", "Liquid / Monitor"],
+        default="Monitor",
+    )
+    return summary.sort_values(["rv_score", "liquidity_score", "trade_count"], ascending=False)
+
+
+def _render_benchmark_methodology_block(mmd_df: pd.DataFrame, benchmark_source_mode: str, benchmark_priority: str, benchmark_conflict_policy: str):
+    st.markdown(
+        """
+<div class="methodology-note">
+<b>Benchmark policy:</b> uploaded MMD is treated as the AAA benchmark curve when it is the active benchmark source.
+If trade-sheet Index / Index Rate is available, the app uses that trade-implied benchmark first and does not mix it with external MMD in the same run.
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    safe_dataframe(
+        pd.DataFrame(
+            [
+                {"Item": "Active benchmark source", "Value": benchmark_source_mode},
+                {"Item": "Priority", "Value": benchmark_priority},
+                {"Item": "Conflict policy", "Value": benchmark_conflict_policy},
+                {"Item": "Benchmark row count", "Value": f"{len(mmd_df):,}"},
+                {"Item": "Spread formula", "Value": "Issuer yield - active benchmark yield"},
+                {"Item": "Attribution policy", "Value": "Rating, sector, callable, and liquidity effects stay separate from benchmark spread."},
+            ]
+        ),
+        width="stretch",
+        hide_index=True,
+        auto_collapse=False,
+    )
+    with st.expander("Rating curve assumptions", expanded=False):
+        safe_dataframe(rating_spread_table(), width="stretch", hide_index=True, auto_collapse=False)
+
+
+def render_focused_upload_audit(
+    trade_reports: list[dict],
+    bond_report: dict | None,
+    mmd_report: dict | None,
+    market_df: pd.DataFrame,
+    bonds_df: pd.DataFrame,
+    issuer_master: pd.DataFrame,
+    mmd_df: pd.DataFrame,
+    trade_payloads: list[tuple[str, bytes]],
+    failed_files: list[str],
+    duplicates_removed: int,
+    benchmark_source_mode: str,
+    benchmark_priority: str,
+    benchmark_conflict_policy: str,
+):
+    section_anchor("workflow-upload-audit", "Upload / Data Audit")
+    st.markdown(
+        "<div class='focus-band'>Start here. Confirm files, row counts, field mapping, date coverage, benchmark source, and blocking issues before reading any charts.</div>",
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        clean_metric_card("Trade Files", f"{len(trade_payloads):,}", size="small")
+    with c2:
+        clean_metric_card("Trade Rows", f"{len(market_df):,}", size="small")
+    with c3:
+        clean_metric_card("Issuers", f"{market_df['issuer'].nunique() if 'issuer' in market_df.columns else 0:,}", size="small")
+    with c4:
+        clean_metric_card("CUSIPs", f"{market_df['cusip'].nunique() if 'cusip' in market_df.columns else 0:,}", size="small")
+    with c5:
+        clean_metric_card("Duplicates Removed", f"{duplicates_removed:,}", size="small")
+
+    audit_rows = []
+    for report in trade_reports:
+        audit_rows.append(
+            {
+                "File": report.get("dataset"),
+                "Rows": report.get("row_count"),
+                "Columns": report.get("column_count"),
+                "Ready": "Yes" if report.get("can_run") else "No",
+                "Missing Required": ", ".join(report.get("missing_required", [])) or "None",
+                "Missing Recommended": ", ".join(report.get("missing_recommended", [])) or "None",
+            }
+        )
+    if bond_report:
+        audit_rows.append(
+            {
+                "File": "Optional bond reference",
+                "Rows": bond_report.get("row_count", 0),
+                "Columns": bond_report.get("column_count", 0),
+                "Ready": "Yes" if bond_report.get("can_run", True) else "No",
+                "Missing Required": ", ".join(bond_report.get("missing_required", [])) or "None",
+                "Missing Recommended": ", ".join(bond_report.get("missing_recommended", [])) or "None",
+            }
+        )
+    if mmd_report:
+        audit_rows.append(
+            {
+                "File": "Optional MMD / benchmark curve",
+                "Rows": mmd_report.get("row_count", 0),
+                "Columns": mmd_report.get("column_count", 0),
+                "Ready": "Yes" if mmd_report.get("can_run", True) else "No",
+                "Missing Required": ", ".join(mmd_report.get("missing_required", [])) or "None",
+                "Missing Recommended": ", ".join(mmd_report.get("missing_recommended", [])) or "None",
+            }
+        )
+    if audit_rows:
+        st.subheader("File Readiness Summary")
+        safe_dataframe(pd.DataFrame(audit_rows), width="stretch", hide_index=True, auto_collapse=False)
+
+    coverage_rows = [
+        {"Metric": "Trade date coverage", "Value": _workflow_date_range_text(market_df)},
+        {"Metric": "Security reference rows", "Value": f"{len(bonds_df):,}"},
+        {"Metric": "Issuer master rows", "Value": f"{len(issuer_master):,}"},
+        {"Metric": "Benchmark rows", "Value": f"{len(mmd_df):,}"},
+        {"Metric": "Failed files", "Value": ", ".join(map(str, failed_files)) if failed_files else "None"},
+    ]
+    st.subheader("Data Coverage")
+    safe_dataframe(pd.DataFrame(coverage_rows), width="stretch", hide_index=True, auto_collapse=False)
+
+    st.subheader("Fixed Benchmark / Methodology Audit")
+    _render_benchmark_methodology_block(mmd_df, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
+
+
+def render_focused_snapshot(
+    market_df: pd.DataFrame,
+    bonds_df: pd.DataFrame,
+    issuer_trades: pd.DataFrame,
+    issuer_bonds: pd.DataFrame,
+    selected_issuer: str,
+    selected_sector: str,
+    benchmark_source_mode: str,
+):
+    section_anchor("workflow-desk-snapshot", "Desk Snapshot")
+    st.markdown(
+        "<div class='focus-band'>Decision-first view. Read this before opening detailed charts: coverage, current spread, liquidity, and the strongest CUSIP candidates.</div>",
+        unsafe_allow_html=True,
+    )
+    issuer_base = _add_workflow_spread_bps(issuer_trades)
+    cusip_summary = _build_workflow_cusip_summary(issuer_base)
+    latest_trade = _workflow_date_range_text(issuer_base)
+    spread_series = pd.to_numeric(issuer_base.get("spread_bps"), errors="coerce") if "spread_bps" in issuer_base.columns else pd.Series(dtype="float64")
+    top_candidate = cusip_summary.iloc[0] if not cusip_summary.empty else None
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        clean_metric_card("Issuer", selected_issuer, size="small", note=selected_sector)
+    with c2:
+        clean_metric_card("Trade Coverage", latest_trade, size="small")
+    with c3:
+        clean_metric_card("Median Spread", "N/A" if spread_series.dropna().empty else f"{spread_series.median():.1f} bps", size="small")
+    with c4:
+        clean_metric_card("Trade Rows", f"{len(issuer_trades):,}", size="small")
+    with c5:
+        clean_metric_card("Top CUSIP", "N/A" if top_candidate is None else top_candidate.get("cusip"), size="small", note=None if top_candidate is None else top_candidate.get("signal"))
+
+    st.subheader("Executive Read-Through")
+    bullets = [
+        f"{selected_issuer} has {len(issuer_trades):,} trade observation(s) and {len(issuer_bonds):,} security-reference row(s) in the current filter.",
+        f"Active benchmark source: {benchmark_source_mode}.",
+    ]
+    if not spread_series.dropna().empty:
+        bullets.append(f"Current median spread screens at {spread_series.median():.1f} bps.")
+    if top_candidate is not None:
+        bullets.append(
+            f"Top current candidate by RV/liquidity score is {top_candidate.get('cusip')} with signal {top_candidate.get('signal')}."
+        )
+    for bullet in bullets:
+        st.markdown(f"- {bullet}")
+
+    if not cusip_summary.empty:
+        st.subheader("Top Opportunity Candidates")
+        display_cols = [
+            "cusip", "signal", "maturity_bucket", "current_spread_bps", "liquidity_score",
+            "rv_score", "trade_count", "total_trade_amount", "latest_trade",
+        ]
+        safe_dataframe(cusip_summary[[c for c in display_cols if c in cusip_summary.columns]].head(10), hide_index=True, auto_collapse=False)
+
+
+def render_focused_core_charts(
+    market_df: pd.DataFrame,
+    issuer_trades: pd.DataFrame,
+    selected_issuer: str,
+    comparison_issuers: list[str],
+    selected_sector: str,
+):
+    section_anchor("workflow-core-charts", "Core Charts")
+    st.markdown(
+        "<div class='focus-band'>Core visual analysis only: spread trend, yield trend, trading volume, and maturity-year curve. Use this page when you want charts without the long audit/admin sections.</div>",
+        unsafe_allow_html=True,
+    )
+    chart_issuers = [selected_issuer] + [x for x in comparison_issuers if x != selected_issuer]
+    chart_base = _add_workflow_spread_bps(market_df[market_df["issuer"].isin(chart_issuers)].copy())
+    chart_base["trade_date"] = pd.to_datetime(chart_base.get("trade_date"), errors="coerce")
+
+    if not chart_base.empty and {"trade_date", "spread_bps", "issuer"}.issubset(chart_base.columns):
+        spread_daily = (
+            chart_base.dropna(subset=["trade_date", "spread_bps"])
+            .groupby([pd.Grouper(key="trade_date", freq="D"), "issuer"], as_index=False)
+            .agg(spread_bps=("spread_bps", "median"), trade_count=("spread_bps", "count"))
+        )
+        if not spread_daily.empty:
+            fig = px.line(
+                spread_daily.sort_values("trade_date"),
+                x="trade_date",
+                y="spread_bps",
+                color="issuer",
+                markers=True,
+                hover_data=["trade_count"],
+                title="Spread Trend by Issuer",
+            )
+            fig.update_layout(hovermode="x unified", yaxis_title="Spread (bps)")
+            safe_plotly_chart(fig, width="stretch")
+
+    if not chart_base.empty and {"trade_date", "yield", "issuer"}.issubset(chart_base.columns):
+        yield_daily = (
+            chart_base.dropna(subset=["trade_date"])
+            .groupby([pd.Grouper(key="trade_date", freq="D"), "issuer"], as_index=False)
+            .agg(avg_yield=("yield", "mean"), trade_count=("yield", "count"))
+        )
+        if not yield_daily.empty:
+            fig = px.line(
+                yield_daily.sort_values("trade_date"),
+                x="trade_date",
+                y="avg_yield",
+                color="issuer",
+                markers=True,
+                hover_data=["trade_count"],
+                title="Average Yield Trend by Issuer",
+            )
+            fig.update_layout(hovermode="x unified", yaxis_title="Yield (%)")
+            safe_plotly_chart(fig, width="stretch")
+
+    if not chart_base.empty and {"trade_date", "trade_amount", "issuer"}.issubset(chart_base.columns):
+        vol = chart_base.copy()
+        vol["trade_amount"] = pd.to_numeric(vol["trade_amount"], errors="coerce").fillna(0)
+        vol["month"] = vol["trade_date"].dt.to_period("M").dt.to_timestamp()
+        monthly = vol.groupby(["month", "issuer"], as_index=False).agg(volume=("trade_amount", "sum"), trade_count=("trade_amount", "count"))
+        if not monthly.empty:
+            fig = px.bar(
+                monthly.sort_values("month"),
+                x="month",
+                y="volume",
+                color="issuer",
+                hover_data=["trade_count"],
+                title="Monthly Trading Volume",
+            )
+            fig.update_layout(barmode="stack", yaxis_title="Par Amount")
+            safe_plotly_chart(fig, width="stretch")
+
+    if not issuer_trades.empty and {"maturity_year", "yield"}.issubset(issuer_trades.columns):
+        curve = issuer_trades.copy()
+        curve["maturity_year"] = pd.to_numeric(curve["maturity_year"], errors="coerce")
+        curve["yield"] = pd.to_numeric(curve["yield"], errors="coerce")
+        curve_summary = (
+            curve.dropna(subset=["maturity_year", "yield"])
+            .groupby("maturity_year", as_index=False)
+            .agg(avg_yield=("yield", "mean"), trade_count=("yield", "count"))
+            .sort_values("maturity_year")
+        )
+        if not curve_summary.empty:
+            fig = px.line(
+                curve_summary,
+                x="maturity_year",
+                y="avg_yield",
+                markers=True,
+                hover_data=["trade_count"],
+                title=f"{selected_issuer} Issuer Curve by Maturity Year",
+            )
+            fig.update_layout(xaxis_title="Maturity Year", yaxis_title="Average Yield (%)")
+            safe_plotly_chart(fig, width="stretch")
+
+
+def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer: str):
+    section_anchor("workflow-cusip-drilldown", "CUSIP Drilldown")
+    st.markdown(
+        "<div class='focus-band'>Security-level workflow: choose one CUSIP, review detail metrics, inspect trade path, then compare same-bucket peers.</div>",
+        unsafe_allow_html=True,
+    )
+    summary = _build_workflow_cusip_summary(issuer_trades)
+    if summary.empty:
+        st.info("No CUSIP-level rows are available for the selected issuer/filter.")
+        return
+
+    selected_cusip = st.selectbox("Select CUSIP", summary["cusip"].dropna().astype(str).tolist())
+    selected_row = summary[summary["cusip"].astype(str) == str(selected_cusip)].iloc[0]
+    detail = _add_workflow_spread_bps(issuer_trades[issuer_trades["cusip"].astype(str) == str(selected_cusip)].copy())
+    detail["trade_date"] = pd.to_datetime(detail.get("trade_date"), errors="coerce")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        clean_metric_card("CUSIP", selected_cusip, size="small")
+    with c2:
+        clean_metric_card("Signal", selected_row.get("signal"), size="small")
+    with c3:
+        clean_metric_card("Spread", _fmt_bps(selected_row.get("current_spread_bps")), size="small")
+    with c4:
+        clean_metric_card("Liquidity", _fmt_num(selected_row.get("liquidity_score")), size="small")
+    with c5:
+        clean_metric_card("Trades", f"{int(selected_row.get('trade_count', 0)):,}", size="small")
+
+    if not detail.empty and {"trade_date", "spread_bps"}.issubset(detail.columns):
+        path = (
+            detail.dropna(subset=["trade_date"])
+            .groupby("trade_date", as_index=False)
+            .agg(spread_bps=("spread_bps", "median"), avg_yield=("yield", "mean"), par=("trade_amount", "sum"))
+            .sort_values("trade_date")
+        )
+        if not path.empty:
+            fig = px.line(path, x="trade_date", y="spread_bps", markers=True, hover_data=["avg_yield", "par"], title=f"{selected_cusip} Spread Path")
+            fig.update_layout(hovermode="x unified", yaxis_title="Spread (bps)")
+            safe_plotly_chart(fig, width="stretch")
+
+    st.subheader("Trade Detail")
+    display_cols = ["trade_date", "trade_type", "yield", "price", "trade_amount", "spread_bps", "maturity_bucket", "description"]
+    safe_dataframe(detail[[c for c in display_cols if c in detail.columns]].sort_values("trade_date", ascending=False), hide_index=True)
+
+    bucket = selected_row.get("maturity_bucket") if "maturity_bucket" in summary.columns else None
+    if pd.notna(bucket):
+        st.subheader("Same-Bucket Peers")
+        peers = summary[summary["maturity_bucket"].astype(str) == str(bucket)].copy()
+        display_cols = ["cusip", "signal", "current_spread_bps", "liquidity_score", "rv_score", "trade_count", "total_trade_amount"]
+        safe_dataframe(peers[[c for c in display_cols if c in peers.columns]].head(15), hide_index=True)
+
+
+def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: str):
+    section_anchor("workflow-rv-watchlist", "RV / Watchlist")
+    st.markdown(
+        "<div class='focus-band'>Ranking page for candidate discovery. Save CUSIPs during the session, then export the shortlist.</div>",
+        unsafe_allow_html=True,
+    )
+    summary = _build_workflow_cusip_summary(issuer_trades)
+    if summary.empty:
+        st.info("No CUSIP-level rows are available for RV ranking.")
+        return
+
+    min_liq = st.slider("Minimum liquidity score", 0, 100, 40)
+    min_trades = st.number_input("Minimum trade count", min_value=1, max_value=1000, value=2, step=1)
+    ranked = summary[
+        (pd.to_numeric(summary["liquidity_score"], errors="coerce") >= min_liq)
+        & (pd.to_numeric(summary["trade_count"], errors="coerce") >= min_trades)
+    ].copy()
+
+    display_cols = ["cusip", "signal", "maturity_bucket", "current_spread_bps", "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade"]
+    st.subheader("Opportunity Ranking")
+    safe_dataframe(ranked[[c for c in display_cols if c in ranked.columns]].head(50), hide_index=True)
+
+    st.subheader("Watchlist")
+    st.session_state.setdefault("focused_watchlist", [])
+    add_options = ranked["cusip"].dropna().astype(str).head(100).tolist()
+    selected_add = st.multiselect("Add CUSIPs", add_options)
+    add_col, clear_col = st.columns([1, 1])
+    with add_col:
+        if st.button("Add to watchlist"):
+            existing = set(map(str, st.session_state["focused_watchlist"]))
+            for item in selected_add:
+                existing.add(str(item))
+            st.session_state["focused_watchlist"] = sorted(existing)
+            st.success(f"Saved {len(st.session_state['focused_watchlist']):,} CUSIP(s).")
+    with clear_col:
+        if st.button("Clear watchlist"):
+            st.session_state["focused_watchlist"] = []
+            st.info("Watchlist cleared.")
+
+    saved = summary[summary["cusip"].astype(str).isin(st.session_state["focused_watchlist"])].copy()
+    if saved.empty:
+        st.info("No saved CUSIPs yet.")
+    else:
+        safe_dataframe(saved[[c for c in display_cols if c in saved.columns]], hide_index=True, auto_collapse=False)
+        st.download_button(
+            "Download Watchlist CSV",
+            data=saved.to_csv(index=False).encode("utf-8"),
+            file_name=f"{selected_issuer}_watchlist.csv".replace(" ", "_"),
+            mime="text/csv",
+        )
+
+
+def render_focused_export_methodology(
+    selected_issuer: str,
+    selected_sector: str,
+    issuer_trades: pd.DataFrame,
+    issuer_bonds: pd.DataFrame,
+    mmd_df: pd.DataFrame,
+    benchmark_source_mode: str,
+    benchmark_priority: str,
+    benchmark_conflict_policy: str,
+):
+    section_anchor("workflow-export-methodology", "Export / Methodology")
+    st.markdown(
+        "<div class='focus-band'>Reporting page: download a concise analyst summary and review the fixed methodology before sharing outputs.</div>",
+        unsafe_allow_html=True,
+    )
+    latest_trade = issuer_trades["trade_date"].max().strftime("%m/%d/%Y") if not issuer_trades.empty and "trade_date" in issuer_trades.columns else "No trades"
+    summary_lines = [
+        "# Secondary Market Desk Snapshot",
+        "",
+        f"Generated: {pd.Timestamp.now():%Y-%m-%d %H:%M}",
+        f"Issuer: {selected_issuer}",
+        f"Sector: {selected_sector}",
+        f"Trade rows: {len(issuer_trades):,}",
+        f"Security rows: {len(issuer_bonds):,}",
+        f"Latest trade: {latest_trade}",
+        f"Benchmark source: {benchmark_source_mode}",
+        "",
+        "## Methodology",
+        "- Uploaded MMD is the AAA benchmark when external MMD is the active source.",
+        "- If trade-sheet Index / Index Rate exists, it is used first and not mixed with external MMD.",
+        "- Spread is calculated as issuer yield minus active benchmark yield.",
+        "- Rating, sector, callable, and liquidity effects are displayed separately in attribution rather than embedded into benchmark spread.",
+        "- RV and liquidity scores are screening tools, not investment recommendations.",
+    ]
+    summary_md = "\n".join(summary_lines)
+    st.download_button(
+        "Download Analyst Summary Markdown",
+        data=summary_md.encode("utf-8"),
+        file_name=f"{selected_issuer}_desk_summary.md".replace(" ", "_"),
+        mime="text/markdown",
+    )
+    with st.expander("Preview summary", expanded=True):
+        st.markdown(summary_md)
+
+    st.subheader("Methodology / Benchmark Audit")
+    _render_benchmark_methodology_block(mmd_df, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
+
+
+def render_focused_workflow(
+    workflow_view: str,
+    trade_reports: list[dict],
+    bond_report: dict | None,
+    mmd_report: dict | None,
+    market_df: pd.DataFrame,
+    bonds_df: pd.DataFrame,
+    issuer_master: pd.DataFrame,
+    mmd_df: pd.DataFrame,
+    trade_payloads: list[tuple[str, bytes]],
+    failed_files: list[str],
+    duplicates_removed: int,
+    uploaded_issuers: list[str],
+    selected_issuer: str,
+    selected_sector: str,
+    issuer_trades: pd.DataFrame,
+    issuer_bonds: pd.DataFrame,
+    comparison_issuers: list[str],
+    benchmark_source_mode: str,
+    benchmark_priority: str,
+    benchmark_conflict_policy: str,
+):
+    render_workflow_header(workflow_view, files_loaded=len(trade_payloads), issuers_loaded=len(uploaded_issuers))
+    if workflow_view == "1. Upload / Data Audit":
+        render_focused_upload_audit(
+            trade_reports, bond_report, mmd_report, market_df, bonds_df, issuer_master, mmd_df,
+            trade_payloads, failed_files, duplicates_removed, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy,
+        )
+    elif workflow_view == "2. Desk Snapshot":
+        render_focused_snapshot(market_df, bonds_df, issuer_trades, issuer_bonds, selected_issuer, selected_sector, benchmark_source_mode)
+    elif workflow_view == "3. Core Charts":
+        render_focused_core_charts(market_df, issuer_trades, selected_issuer, comparison_issuers, selected_sector)
+    elif workflow_view == "4. CUSIP Drilldown":
+        render_focused_cusip_drilldown(issuer_trades, selected_issuer)
+    elif workflow_view == "5. RV / Watchlist":
+        render_focused_rv_watchlist(issuer_trades, selected_issuer)
+    elif workflow_view == "6. Export / Methodology":
+        render_focused_export_methodology(
+            selected_issuer, selected_sector, issuer_trades, issuer_bonds, mmd_df,
+            benchmark_source_mode, benchmark_priority, benchmark_conflict_policy,
+        )
 
 
 def section_directory():
@@ -2769,44 +3453,13 @@ def dataframe_download_button(df: pd.DataFrame, label: str, filename: str):
 
 
 with st.sidebar:
-    st.header("1. Trading Data")
-    trade_files = st.file_uploader(
-        "Trade History File(s) — required",
-        type=["csv", "xlsx", "xls"],
-        accept_multiple_files=True,
-        help="Required. Name each trade file after its issuer, e.g. State_of_California_Trade.csv or LADWP_Trade.xlsx.",
+    st.header("Workflow")
+    workflow_view = st.radio(
+        "Workspace section",
+        WORKFLOW_LABELS + [FULL_DASHBOARD_LABEL],
+        index=0,
+        help="Use the focused six-step flow for day-to-day work. Full Dashboard keeps the original long-form workstation available.",
     )
-
-    st.caption("Name each trade file after its issuer, e.g. `State_of_California_Trade.csv` or `LADWP_Trade.xlsx`. The app will use the filename as the issuer name.")
-    st.caption("Tip: Keep proprietary raw exports out of public GitHub. Upload them only during your own session.")
-
-    st.markdown("---")
-    st.header("Optional Reference Files")
-    with st.expander("Optional Bond / Issuer / MMD files", expanded=False):
-        bond_file = st.file_uploader("Bond Reference File — optional enrichment", type=["csv", "xlsx", "xls"])
-        issuer_mapping_file = st.file_uploader("Issuer / Sector Mapping — optional", type=["csv", "xlsx", "xls"])
-        use_external_mmd_fallback = st.checkbox(
-            "Enable External MMD Fallback",
-            value=False,
-            help=(
-                "Off by default to prevent memory overload. The app uses Trade Sheet Index / Index Rate first. "
-                "Only enable this if your trade files do not have usable Index Rate data."
-            ),
-        )
-        mmd_file = st.file_uploader(
-            "MMD Curve File — optional fallback",
-            type=["csv", "xlsx", "xls"],
-            disabled=not use_external_mmd_fallback,
-            help="Loaded only when External MMD Fallback is enabled and trade-sheet Index Rate is unavailable.",
-        )
-        if not use_external_mmd_fallback:
-            st.caption("External MMD loading is off. This protects Streamlit memory and avoids benchmark-source conflict.")
-
-    with st.expander("Download blank templates", expanded=False):
-        template_download_button(TRADE_REQUIRED + TRADE_RECOMMENDED + TRADE_OPTIONAL, "Trade template CSV", "trade_history_template.csv")
-        template_download_button(BOND_REQUIRED + BOND_RECOMMENDED + BOND_OPTIONAL, "Optional bond reference template CSV", "bond_reference_template.csv")
-        template_download_button(CURVE_TEMPLATE_COLUMNS, "Fallback MMD curve template CSV", "benchmark_curve_template.csv")
-
     st.markdown("---")
     st.header("Performance")
     PERFORMANCE_MODE = st.checkbox(
@@ -2843,7 +3496,52 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+with st.expander(
+    "Upload Center",
+    expanded=(workflow_view == "1. Upload / Data Audit"),
+):
+    st.markdown(
+        "<div class='focus-band'>Upload one or more MuniPro trade files here first. Optional reference files can enrich the analysis, but the trade file is the only required input.</div>",
+        unsafe_allow_html=True,
+    )
+    upload_col1, upload_col2 = st.columns([1.15, 0.85])
+    with upload_col1:
+        trade_files = st.file_uploader(
+            "Trade History File(s) — required",
+            type=["csv", "xlsx", "xls"],
+            accept_multiple_files=True,
+            help="Required. Name each trade file after its issuer, e.g. State_of_California_Trade.csv or LADWP_Trade.xlsx.",
+        )
+        st.caption("Name each trade file after its issuer. The app uses the filename as the issuer name.")
+        st.caption("Keep proprietary raw exports out of public GitHub. Upload them only during your own session.")
+
+    with upload_col2:
+        bond_file = st.file_uploader("Bond Reference File — optional enrichment", type=["csv", "xlsx", "xls"])
+        issuer_mapping_file = st.file_uploader("Issuer / Sector Mapping — optional", type=["csv", "xlsx", "xls"])
+        use_external_mmd_fallback = st.checkbox(
+            "Enable External MMD Fallback",
+            value=False,
+            help=(
+                "Off by default to prevent memory overload. The app uses Trade Sheet Index / Index Rate first. "
+                "Only enable this if your trade files do not have usable Index Rate data."
+            ),
+        )
+        mmd_file = st.file_uploader(
+            "MMD Curve File — optional fallback",
+            type=["csv", "xlsx", "xls"],
+            disabled=not use_external_mmd_fallback,
+            help="Loaded only when External MMD Fallback is enabled and trade-sheet Index Rate is unavailable.",
+        )
+        if not use_external_mmd_fallback:
+            st.caption("External MMD loading is off. This avoids benchmark-source conflict and protects memory.")
+
+    with st.expander("Download blank templates", expanded=False):
+        template_download_button(TRADE_REQUIRED + TRADE_RECOMMENDED + TRADE_OPTIONAL, "Trade template CSV", "trade_history_template.csv")
+        template_download_button(BOND_REQUIRED + BOND_RECOMMENDED + BOND_OPTIONAL, "Optional bond reference template CSV", "bond_reference_template.csv")
+        template_download_button(CURVE_TEMPLATE_COLUMNS, "Fallback MMD curve template CSV", "benchmark_curve_template.csv")
+
 if not trade_files:
+    render_workflow_header(workflow_view, files_loaded=0, issuers_loaded=0)
     st.info("Upload at least one MuniPro trade-history file to generate the dashboard. Bond reference data is optional enrichment.")
     with st.expander("Expected file logic"):
         st.write(
@@ -2856,19 +3554,24 @@ bond_payload = (bond_file.name, bond_file.getvalue()) if bond_file else None
 trade_payloads = [(f.name, f.getvalue()) for f in trade_files]
 issuer_mapping_payload = (issuer_mapping_file.name, issuer_mapping_file.getvalue()) if issuer_mapping_file else None
 mmd_payload = (mmd_file.name, mmd_file.getvalue()) if (use_external_mmd_fallback and mmd_file) else None
+show_file_audit = workflow_view in {"1. Upload / Data Audit", FULL_DASHBOARD_LABEL}
+show_methodology_audit = workflow_view in {"1. Upload / Data Audit", "6. Export / Methodology", FULL_DASHBOARD_LABEL}
 
 # -----------------------------------------------------------------------------
 # File-readiness gate: inspect the uploaded files before running full analytics.
 # -----------------------------------------------------------------------------
-section_anchor("file-readiness", "File Readiness Check")
+if show_file_audit:
+    section_anchor("file-readiness", "File Readiness Check")
 if bond_payload is not None:
     raw_bonds_preview = read_uploaded_file(io.BytesIO(bond_payload[1]), bond_payload[0])
     bond_report = validate_dataset(raw_bonds_preview, bond_payload[0], ["cusip"], BOND_RECOMMENDED, BOND_OPTIONAL)
     bond_warnings = validate_basic_values(raw_bonds_preview, bond_report["mapping"], dataset_type="bond")
-    display_validation_report("Optional Bond Reference File", bond_report, bond_warnings)
+    if show_file_audit:
+        display_validation_report("Optional Bond Reference File", bond_report, bond_warnings)
 else:
     bond_report = {"can_run": True}
-    st.info("No bond reference file uploaded. Running in trade-only mode; static bond metadata will be inferred from the trade tape where possible.")
+    if show_file_audit:
+        st.info("No bond reference file uploaded. Running in trade-only mode; static bond metadata will be inferred from the trade tape where possible.")
 
 trade_reports = []
 trade_blocking_failures = []
@@ -2878,7 +3581,8 @@ for trade_name, trade_bytes in trade_payloads:
         report = validate_dataset(raw_trade_preview, trade_name, TRADE_REQUIRED, TRADE_RECOMMENDED, TRADE_OPTIONAL)
         warnings = validate_basic_values(raw_trade_preview, report["mapping"], dataset_type="trade")
         trade_reports.append(report)
-        display_validation_report(f"Trade File — {trade_name}", report, warnings)
+        if show_file_audit:
+            display_validation_report(f"Trade File — {trade_name}", report, warnings)
         if not report["can_run"]:
             trade_blocking_failures.append(trade_name)
     except Exception as exc:
@@ -2897,21 +3601,27 @@ if mmd_payload is not None:
         mmd_name, mmd_bytes = mmd_payload
         raw_mmd_preview = read_uploaded_file(io.BytesIO(mmd_bytes), mmd_name)
         mmd_report = validate_dataset(raw_mmd_preview, mmd_name, MMD_REQUIRED, MMD_RECOMMENDED, [])
-        display_validation_report("MMD Curve File", mmd_report)
-        if not mmd_report["can_run"]:
+        if show_file_audit:
+            display_validation_report("MMD Curve File", mmd_report)
+        if show_file_audit and not mmd_report["can_run"]:
             st.warning("MMD comparison will be skipped unless the MMD file has a date column.")
     except Exception as exc:
-        st.warning(f"Could not validate MMD file. MMD comparison may be skipped: {exc}")
+        mmd_report = None
+        if show_file_audit:
+            st.warning(f"Could not validate MMD file. MMD comparison may be skipped: {exc}")
+else:
+    mmd_report = None
 
-with st.expander("Methodology: how the app decides whether a file is usable", expanded=False):
-    st.markdown(
-        """
+if show_file_audit:
+    with st.expander("Methodology: how the app decides whether a file is usable", expanded=False):
+        st.markdown(
+            """
 - **Required fields** are the minimum fields needed for the dashboard to run.
 - **Recommended fields** improve liquidity, benchmark, tax, and relative-value analysis, but missing them should not break the app.
 - **Column aliases** let the app recognize variants like `CUSIP9`, `Cusip`, or `CUSIP` as the same internal `cusip` field.
 - **Warnings** flag data-quality issues, but the app only stops when a required trade field is missing.
         """
-    )
+        )
 
 (
     bonds_df,
@@ -2952,31 +3662,33 @@ if not uploaded_issuers:
     st.error("No issuer names were detected from the uploaded trade files. Please check Description, issuer mapping, or trade filenames.")
     st.stop()
 
-st.success(
-    f"Processed {len(market_df):,} trade rows and built {len(bonds_df):,} security-reference rows "
-    f"from {len(trade_files):,} trade file(s). Detected {len(uploaded_issuers):,} issuer(s)."
-)
+if show_file_audit:
+    st.success(
+        f"Processed {len(market_df):,} trade rows and built {len(bonds_df):,} security-reference rows "
+        f"from {len(trade_files):,} trade file(s). Detected {len(uploaded_issuers):,} issuer(s)."
+    )
 
 benchmark_source_mode = mmd_df.attrs.get("benchmark_source_mode", "None")
 benchmark_priority = mmd_df.attrs.get("benchmark_source_priority", "None")
 benchmark_conflict_policy = mmd_df.attrs.get("benchmark_conflict_policy", "No benchmark source selected")
 uploaded_mmd_available = bool(mmd_df.attrs.get("uploaded_mmd_available", False))
 
-if benchmark_source_mode == "Trade Sheet Index / Index Rate":
-    st.info(
-        "Benchmark source: using **Index / Index Rate from the uploaded trade sheet** as the primary benchmark universe. "
-        "Any uploaded MMD file is treated as fallback only and is not mixed into the same analytics run."
-    )
-elif benchmark_source_mode == "Uploaded MMD fallback":
-    st.info(
-        "Benchmark source: using the **uploaded MMD file as fallback** because the trade sheet did not contain usable Index / Index Rate data."
-    )
-else:
-    st.warning("No benchmark source detected. Upload trades with Index / Index Rate or provide an MMD file for benchmark analytics.")
+if show_methodology_audit:
+    if benchmark_source_mode == "Trade Sheet Index / Index Rate":
+        st.info(
+            "Benchmark source: using **Index / Index Rate from the uploaded trade sheet** as the primary benchmark universe. "
+            "Any uploaded MMD file is treated as fallback only and is not mixed into the same analytics run."
+        )
+    elif benchmark_source_mode == "Uploaded MMD fallback":
+        st.info(
+            "Benchmark source: using the **uploaded MMD file as fallback** because the trade sheet did not contain usable Index / Index Rate data."
+        )
+    else:
+        st.warning("No benchmark source detected. Upload trades with Index / Index Rate or provide an MMD file for benchmark analytics.")
 
-with st.expander("Benchmark source governance", expanded=False):
-    st.markdown(
-        """
+    with st.expander("Benchmark source governance", expanded=False):
+        st.markdown(
+            """
 This dashboard uses **one benchmark source at a time** to avoid benchmark-source conflict.
 
 **Priority hierarchy**
@@ -2992,17 +3704,17 @@ This dashboard uses **one benchmark source at a time** to avoid benchmark-source
 
 Trade-sheet index rates and an external MMD sheet may differ by date, tenor, rounding, provider convention, or interpolation method. Mixing them can shift spreads by several basis points and make relative-value signals inconsistent.
         """
-    )
-    safe_dataframe(
-        pd.DataFrame([
-            {"Item": "Active benchmark source", "Value": benchmark_source_mode},
-            {"Item": "Priority", "Value": benchmark_priority},
-            {"Item": "Conflict policy", "Value": benchmark_conflict_policy},
-            {"Item": "Uploaded MMD detected", "Value": "Yes" if uploaded_mmd_available else "No / Not used"},
-        ]),
-        width="stretch",
-        hide_index=True,
-    )
+        )
+        safe_dataframe(
+            pd.DataFrame([
+                {"Item": "Active benchmark source", "Value": benchmark_source_mode},
+                {"Item": "Priority", "Value": benchmark_priority},
+                {"Item": "Conflict policy", "Value": benchmark_conflict_policy},
+                {"Item": "Uploaded MMD detected", "Value": "Yes" if uploaded_mmd_available else "No / Not used"},
+            ]),
+            width="stretch",
+            hide_index=True,
+        )
 
 with st.sidebar:
     st.markdown("---")
@@ -3374,6 +4086,31 @@ if not issuer_trades.empty and trade_date_filter_enabled and selected_trade_date
             (pd.to_datetime(issuer_trades["trade_date"], errors="coerce").dt.date >= _start_date)
             & (pd.to_datetime(issuer_trades["trade_date"], errors="coerce").dt.date <= _end_date)
         ].copy()
+
+if workflow_view != FULL_DASHBOARD_LABEL:
+    render_focused_workflow(
+        workflow_view=workflow_view,
+        trade_reports=trade_reports,
+        bond_report=bond_report,
+        mmd_report=mmd_report,
+        market_df=market_df,
+        bonds_df=bonds_df,
+        issuer_master=issuer_master,
+        mmd_df=mmd_df,
+        trade_payloads=trade_payloads,
+        failed_files=failed_files,
+        duplicates_removed=duplicates_removed,
+        uploaded_issuers=uploaded_issuers,
+        selected_issuer=selected_issuer,
+        selected_sector=selected_sector,
+        issuer_trades=issuer_trades,
+        issuer_bonds=issuer_bonds,
+        comparison_issuers=comparison_issuers_sidebar,
+        benchmark_source_mode=benchmark_source_mode,
+        benchmark_priority=benchmark_priority,
+        benchmark_conflict_policy=benchmark_conflict_policy,
+    )
+    st.stop()
 
 
 # Data Quality Scorecard removed for trade-only workflow.
