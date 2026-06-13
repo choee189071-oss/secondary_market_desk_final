@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import html
 import re
 
 import numpy as np
@@ -523,6 +524,60 @@ div[data-testid="stMetric"] {
     line-height: 1.35;
 }
 
+.advanced-gateway {
+    background: #f8fafc;
+    border: 1px solid #dbe3ee;
+    border-radius: 14px;
+    padding: 18px 20px;
+    margin: 10px 0 18px 0;
+}
+
+.advanced-gateway-title {
+    color: #111827;
+    font-size: 1.05rem;
+    font-weight: 800;
+    margin-bottom: 6px;
+}
+
+.advanced-gateway-copy {
+    color: #475569;
+    font-size: 0.92rem;
+    line-height: 1.45;
+    margin-bottom: 12px;
+}
+
+.advanced-link-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.advanced-link-card {
+    background: #ffffff;
+    border: 1px solid #dbe3ee;
+    border-radius: 12px;
+    padding: 11px 12px;
+    min-height: 72px;
+}
+
+.advanced-link-card a {
+    color: #1f7669;
+    font-weight: 780;
+    text-decoration: none;
+}
+
+.advanced-link-card a:hover {
+    text-decoration: underline;
+}
+
+.advanced-link-note {
+    color: #64748b;
+    font-size: 0.8rem;
+    line-height: 1.3;
+    margin-top: 5px;
+}
+
 .methodology-note {
     background: #fffdf4;
     border: 1px solid #f5d36b;
@@ -649,7 +704,8 @@ div[data-testid="stMetric"] {
     }
 
     .file-card-grid,
-    .status-card-grid {
+    .status-card-grid,
+    .advanced-link-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
@@ -660,7 +716,8 @@ div[data-testid="stMetric"] {
     }
 
     .file-card-grid,
-    .status-card-grid {
+    .status-card-grid,
+    .advanced-link-grid {
         grid-template-columns: repeat(1, minmax(0, 1fr));
     }
 }
@@ -1407,16 +1464,22 @@ WORKFLOW_GUIDANCE = {
     "6. Export / Methodology": {
         "focus": "Review + export",
     },
+    FULL_DASHBOARD_LABEL: {
+        "focus": "Advanced audit + historical modules",
+    },
 }
 
 
 def _workflow_guidance_html(active_label: str, files_loaded: int, issuers_loaded: int) -> str:
     current = WORKFLOW_GUIDANCE.get(active_label, WORKFLOW_GUIDANCE["1. Upload / Data Audit"])
-    try:
-        idx = WORKFLOW_LABELS.index(active_label)
-        next_label = WORKFLOW_LABELS[idx + 1] if idx + 1 < len(WORKFLOW_LABELS) else "Analyst review / delivery"
-    except ValueError:
-        next_label = "Upload / Data Audit"
+    if active_label == FULL_DASHBOARD_LABEL:
+        next_label = "Return to six-step workflow / analyst review"
+    else:
+        try:
+            idx = WORKFLOW_LABELS.index(active_label)
+            next_label = WORKFLOW_LABELS[idx + 1] if idx + 1 < len(WORKFLOW_LABELS) else "Analyst review / delivery"
+        except ValueError:
+            next_label = "Upload / Data Audit"
     data_status = (
         f"{files_loaded:,} files / {issuers_loaded:,} issuers"
         if files_loaded
@@ -1449,9 +1512,69 @@ def render_workflow_header(active_label: str, files_loaded: int = 0, issuers_loa
 </div>
 """
         )
+    if active_label == FULL_DASHBOARD_LABEL:
+        html_parts.append(
+            """
+<div class='workflow-step workflow-step-active'>
+  <div class='workflow-step-num'>07</div>
+  <div class='workflow-step-title'>Advanced Audit</div>
+  <div class='workflow-step-note'>Full workstation, methodology tracing, older modules.</div>
+</div>
+"""
+        )
     html_parts.append("</div>")
     st.markdown("".join(html_parts), unsafe_allow_html=True)
     st.markdown(_workflow_guidance_html(active_label, files_loaded, issuers_loaded), unsafe_allow_html=True)
+
+
+def render_advanced_audit_gateway(
+    files_loaded: int,
+    issuers_loaded: int,
+    selected_issuer: str,
+    selected_sector: str,
+    benchmark_source_mode: str,
+):
+    """Introduce the long-form workstation as an integrated advanced audit layer."""
+    safe_issuer = html.escape(str(selected_issuer or "Selected issuer"), quote=True)
+    safe_sector = html.escape(str(selected_sector or "Unknown"), quote=True)
+    safe_benchmark = html.escape(str(benchmark_source_mode or "Unknown"), quote=True)
+    render_workflow_header(FULL_DASHBOARD_LABEL, files_loaded=files_loaded, issuers_loaded=issuers_loaded)
+    st.markdown(
+        f"""
+<div class="advanced-gateway">
+  <div class="advanced-gateway-title">Advanced Audit Workspace</div>
+  <div class="advanced-gateway-copy">
+    This section keeps the full long-form workstation available for reviewer checks, methodology tracing,
+    and older analytical modules. Use the six-step workflow for normal analysis; use this page when you need
+    deeper evidence for <b>{safe_issuer}</b>, sector context, benchmark diagnostics, or export support.
+  </div>
+  <div class="focus-band">
+    <b>Current context:</b> {safe_issuer} &nbsp; | &nbsp;
+    <b>Sector:</b> {safe_sector} &nbsp; | &nbsp;
+    <b>Benchmark:</b> {safe_benchmark}
+  </div>
+  <div class="advanced-link-grid">
+    <div class="advanced-link-card">
+      <a href="#desk-market-snapshot">Desk Snapshot</a>
+      <div class="advanced-link-note">Spread trend, volume, curve snapshot, and top movers.</div>
+    </div>
+    <div class="advanced-link-card">
+      <a href="#yield-relative-value">Benchmark & RV</a>
+      <div class="advanced-link-note">Yield trend, issuer curve, spread framework, and attribution.</div>
+    </div>
+    <div class="advanced-link-card">
+      <a href="#cusip-drilldown">CUSIP Evidence</a>
+      <div class="advanced-link-note">Security detail, path history, peer table, and screener.</div>
+    </div>
+    <div class="advanced-link-card">
+      <a href="#report-export-center">Export & Methodology</a>
+      <div class="advanced-link-note">Reports, review outputs, benchmark policy, and downloads.</div>
+    </div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 # Focused watchlist helpers live in ui/cusip_detail.py.
@@ -1799,9 +1922,9 @@ with st.sidebar:
         "Workspace section",
         WORKFLOW_LABELS + [FULL_DASHBOARD_LABEL],
         index=0,
-        help="Use the focused six-step flow for day-to-day work. Advanced / Legacy Dashboard keeps the original long-form workstation available.",
+        help="Use the focused six-step flow for day-to-day work. Advanced Audit keeps the full long-form workstation available for reviewer checks.",
     )
-    st.caption("Daily workflow: use the six focused pages. Open the legacy dashboard only for deep audits or older modules.")
+    st.caption("Daily workflow: use the six focused pages. Open Advanced Audit for deep methodology checks and older analytical modules.")
     st.markdown("---")
     st.header("Performance")
     PERFORMANCE_MODE = st.checkbox(
@@ -2463,6 +2586,14 @@ if workflow_view != FULL_DASHBOARD_LABEL:
         mmd_file_provided=mmd_payload is not None,
     )
     st.stop()
+
+render_advanced_audit_gateway(
+    files_loaded=len(trade_payloads),
+    issuers_loaded=len(uploaded_issuers),
+    selected_issuer=selected_issuer,
+    selected_sector=selected_sector,
+    benchmark_source_mode=benchmark_source_mode,
+)
 
 
 # Data Quality Scorecard removed for trade-only workflow.

@@ -72,7 +72,7 @@ The default experience is intentionally focused:
 - Show conclusions, next actions, and key metrics before data tables.
 - Keep detailed audit tables, methodology evidence, and large ranking tables inside expanders.
 - Render only the chart modules the analyst selects.
-- Keep the legacy dashboard available for deep audits, but do not make it the default reading path.
+- Keep Advanced Audit available for deep methodology checks and older modules, but do not make it the default reading path.
 
 ## Analyst Validation Workflow
 

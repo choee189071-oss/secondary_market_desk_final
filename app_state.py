@@ -51,4 +51,4 @@ WORKFLOW_STEPS = [
 ]
 
 WORKFLOW_LABELS = [step["label"] for step in WORKFLOW_STEPS]
-FULL_DASHBOARD_LABEL = "Advanced / Legacy Dashboard"
+FULL_DASHBOARD_LABEL = "7. Advanced Audit"
