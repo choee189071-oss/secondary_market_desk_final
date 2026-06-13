@@ -74,7 +74,6 @@ from reports.export_center import (
     focused_methodology_appendix as _focused_methodology_appendix,
 )
 from ui.charts import render_focused_core_charts
-from ui.common import _status_label
 from ui.cusip_detail import (
     _focused_watchlist_dataframe,
     render_focused_cusip_drilldown,
@@ -91,6 +90,16 @@ from ui.upload import (
     render_focused_upload_audit,
     render_upload_file_cards,
 )
+
+
+def _status_label(status: str) -> str:
+    """Local fallback used by report-context rows before UI modules render."""
+    return {
+        "good": "Green",
+        "warn": "Yellow",
+        "bad": "Red",
+        "neutral": "Info",
+    }.get(status, "Info")
 
 
 # =========================

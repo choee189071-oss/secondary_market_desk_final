@@ -12,11 +12,20 @@ from ui.common import (
     _nonnull_rate,
     _rate_status,
     _render_card_grid,
-    _status_label,
     clean_metric_card,
     safe_dataframe,
     section_anchor,
 )
+
+
+def _status_label(status: str) -> str:
+    """Local fallback so this module does not depend on a private common helper."""
+    return {
+        "good": "Green",
+        "warn": "Yellow",
+        "bad": "Red",
+        "neutral": "Info",
+    }.get(status, "Info")
 
 
 def render_upload_file_cards(
