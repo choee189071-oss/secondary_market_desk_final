@@ -1385,6 +1385,56 @@ def clean_metric_card(label: str, value: object, size: str = "large", note: str 
 # Focused upload helpers live in ui/upload.py; shared card helpers live in ui/common.py.
 
 
+WORKFLOW_GUIDANCE = {
+    "1. Upload / Data Audit": {
+        "focus": "Confirm files, field mapping, date coverage, CUSIP quality, and benchmark source before trusting any output.",
+        "output": "Ready-to-analyze status plus any upload or benchmark warnings.",
+    },
+    "2. Desk Snapshot": {
+        "focus": "Read the issuer-level conclusion first: rows, dates, median spread, liquidity, top candidate, and warnings.",
+        "output": "Executive desk snapshot and top five opportunities.",
+    },
+    "3. Core Charts": {
+        "focus": "Use spread trend, activity, and issuer curve to check whether the signal is broad, liquid, and benchmark-supported.",
+        "output": "Chart-backed evidence for spread, volume, and curve positioning.",
+    },
+    "4. CUSIP Drilldown": {
+        "focus": "Validate a selected bond through security detail, trade path, same-bucket peers, and benchmark audit.",
+        "output": "CUSIP-level read-through and evidence for saving or rejecting a candidate.",
+    },
+    "5. RV / Watchlist": {
+        "focus": "Rank opportunities, save candidates, add notes, and separate actionable names from noisy screens.",
+        "output": "Saved candidate list with analyst notes.",
+    },
+    "6. Export / Methodology": {
+        "focus": "Package the snapshot, watchlist, methodology, trust layer, and analyst review into shareable outputs.",
+        "output": "Markdown, HTML, PDF, PPTX, bundle, review CSV/JSON, and methodology appendix.",
+    },
+}
+
+
+def _workflow_guidance_html(active_label: str, files_loaded: int, issuers_loaded: int) -> str:
+    current = WORKFLOW_GUIDANCE.get(active_label, WORKFLOW_GUIDANCE["1. Upload / Data Audit"])
+    try:
+        idx = WORKFLOW_LABELS.index(active_label)
+        next_label = WORKFLOW_LABELS[idx + 1] if idx + 1 < len(WORKFLOW_LABELS) else "Analyst review / delivery"
+    except ValueError:
+        next_label = "Upload / Data Audit"
+    data_status = (
+        f"{files_loaded:,} file(s) loaded across {issuers_loaded:,} issuer(s)."
+        if files_loaded
+        else "No trade file loaded yet."
+    )
+    return f"""
+<div class='focus-band'>
+  <b>Current focus:</b> {current['focus']}<br>
+  <b>Data status:</b> {data_status}<br>
+  <b>Next step:</b> {next_label}<br>
+  <b>Output from this page:</b> {current['output']}
+</div>
+"""
+
+
 def render_workflow_header(active_label: str, files_loaded: int = 0, issuers_loaded: int = 0):
     """Render the six-step workstation flow as a compact visual map."""
     html_parts = ["<div class='workflow-grid'>"]
@@ -1407,6 +1457,7 @@ def render_workflow_header(active_label: str, files_loaded: int = 0, issuers_loa
         )
     html_parts.append("</div>")
     st.markdown("".join(html_parts), unsafe_allow_html=True)
+    st.markdown(_workflow_guidance_html(active_label, files_loaded, issuers_loaded), unsafe_allow_html=True)
 
 
 # Focused watchlist helpers live in ui/cusip_detail.py.

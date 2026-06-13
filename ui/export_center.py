@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from engine.methodology import methodology_trust_layers
 from reports.export_center import (
     focused_report_bundle_bytes,
     focused_report_filename,
@@ -10,6 +11,7 @@ from reports.export_center import (
     focused_report_pdf_bytes,
     focused_report_pptx_bytes,
 )
+from ui.analyst_review import render_analyst_review_mode
 
 
 def _select_existing(df, columns: list[str]):
@@ -99,6 +101,17 @@ def render_focused_export_methodology(
     if context.get("top_candidate_note"):
         st.caption(f"Top candidate read-through: {context['top_candidate_note']}")
 
+    st.subheader("Methodology Trust Layer")
+    trust_layers = methodology_trust_layers(
+        benchmark_source_mode=benchmark_source_mode,
+        benchmark_priority=benchmark_priority,
+        benchmark_conflict_policy=benchmark_conflict_policy,
+    )
+    trust_tabs = st.tabs(list(trust_layers.keys()))
+    for tab, (layer_name, layer_df) in zip(trust_tabs, trust_layers.items()):
+        with tab:
+            safe_dataframe(layer_df, hide_index=True, auto_collapse=False)
+
     st.subheader("Top Opportunities Included")
     top_cols = [
         "cusip", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
@@ -119,6 +132,8 @@ def render_focused_export_methodology(
         st.info("No saved watchlist candidates yet. Save CUSIPs from CUSIP Drilldown or RV / Watchlist before final export.")
     else:
         safe_dataframe(_select_existing(context["saved_watchlist"], watch_cols), hide_index=True, auto_collapse=False)
+
+    render_analyst_review_mode(context, selected_issuer, safe_dataframe)
 
     st.subheader("Core Chart Guide Included")
     safe_dataframe(context["chart_explanations"], hide_index=True, auto_collapse=False)

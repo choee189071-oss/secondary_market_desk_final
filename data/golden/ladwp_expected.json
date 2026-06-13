@@ -1,0 +1,39 @@
+{
+  "name": "LADWP golden sample expected outputs",
+  "issuer": "LADWP",
+  "source_note": "Local analyst-trusted MuniPro LADWP export with uploaded AAA MMD. Do not commit the source workbook.",
+  "methodology_note": "Uploaded MMD is treated as AAA. Current LADWP run uses Trade Sheet Index / Index Rate as the active benchmark source.",
+  "expected": {
+    "selected_issuer": "LADWP",
+    "market_rows": 46278,
+    "cusip_count": 216,
+    "benchmark_rows": 576,
+    "benchmark_long_rows": 23040,
+    "spread_observation_rows": 9905,
+    "curve_snapshot_rows": 111,
+    "date_range": "01/19/2024 - 05/26/2026",
+    "median_spread_bps": {
+      "value": 32.2,
+      "tolerance": 0.1
+    },
+    "median_liquidity": {
+      "value": 48.6,
+      "tolerance": 0.2
+    },
+    "benchmark_source_mode": "Trade Sheet Index / Index Rate",
+    "top_cusip": "544532NV2",
+    "top_trade_count": 410,
+    "top_current_spread_bps": {
+      "value": 46.2,
+      "tolerance": 0.1
+    },
+    "top_liquidity_score": {
+      "value": 90.0,
+      "tolerance": 0.2
+    },
+    "top_rv_score": {
+      "value": 95.0,
+      "tolerance": 0.2
+    }
+  }
+}

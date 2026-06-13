@@ -27,6 +27,7 @@ from engine.benchmark import (
     make_benchmark_long,
 )
 from engine.load_data import process_uploads
+from engine.methodology import analyst_review_items, methodology_trust_layers
 from engine.scoring import (
     add_workflow_spread_bps,
     build_workflow_cusip_summary,
@@ -58,6 +59,7 @@ LOCAL_LADWP_TRADE = Path("/Users/zhouyiyi/Desktop/Intern_Muni_Data/Secondary/LAD
 LOCAL_LADWP_MMD = Path("/Users/zhouyiyi/Desktop/Intern_Muni_Data/Secondary/LADWP/2024-26/mmd.csv")
 PROJECT_SAMPLE_TRADE = REPO_ROOT / "data" / "processed" / "Trade_Output_Sample.csv"
 PROJECT_SAMPLE_MMD = REPO_ROOT / "data" / "processed" / "mmd.csv"
+DEFAULT_EXPECTED_FILE = REPO_ROOT / "data" / "golden" / "ladwp_expected.json"
 
 COMPILE_TARGETS = [
     "streamlit_app.py",
@@ -69,6 +71,7 @@ COMPILE_TARGETS = [
     "engine/normalize.py",
     "engine/scoring.py",
     "engine/benchmark.py",
+    "engine/methodology.py",
     "engine/validation.py",
     "engine/load_data.py",
     "reports/__init__.py",
@@ -77,6 +80,7 @@ COMPILE_TARGETS = [
     "ui/common.py",
     "ui/charts.py",
     "ui/cusip_detail.py",
+    "ui/analyst_review.py",
     "ui/export_center.py",
     "ui/upload.py",
     "ui/snapshot.py",
@@ -101,6 +105,98 @@ def add_check(checks: list[dict], name: str, condition: object, detail: object =
             "detail": str(detail),
         }
     )
+
+
+def _expected_field(payload: dict, field: str, default: object = None) -> object:
+    expected = payload.get("expected", payload)
+    if isinstance(expected, dict) and field in expected:
+        return expected[field]
+    return payload.get(field, default)
+
+
+def _expected_value_and_tolerance(entry: object) -> tuple[object, float | None]:
+    if isinstance(entry, dict) and "value" in entry:
+        tolerance = entry.get("tolerance")
+        return entry.get("value"), None if tolerance is None else float(tolerance)
+    return entry, None
+
+
+def _to_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("bps", "").replace("bp", "").strip())
+    except Exception:
+        return None
+
+
+def _actual_expected_values(diagnostics: dict) -> dict[str, object]:
+    top = diagnostics.get("top_opportunities") or []
+    top_row = top[0] if top else {}
+    top_cusip = str(top_row.get("cusip", "N/A")) if top_row else "N/A"
+    return {
+        "selected_issuer": diagnostics.get("selected_issuer"),
+        "market_rows": diagnostics.get("market_rows"),
+        "cusip_count": diagnostics.get("cusip_count"),
+        "benchmark_rows": diagnostics.get("benchmark_rows"),
+        "benchmark_long_rows": diagnostics.get("benchmark_long_rows"),
+        "spread_observation_rows": diagnostics.get("spread_observation_rows"),
+        "curve_snapshot_rows": diagnostics.get("curve_snapshot_rows"),
+        "date_range": diagnostics.get("date_range"),
+        "median_spread_bps": diagnostics.get("median_spread_bps"),
+        "median_liquidity": diagnostics.get("median_liquidity"),
+        "benchmark_source_mode": diagnostics.get("benchmark_source_mode"),
+        "top_cusip": top_cusip,
+        "top_trade_count": top_row.get("trade_count"),
+        "top_current_spread_bps": top_row.get("current_spread_bps"),
+        "top_liquidity_score": top_row.get("liquidity_score"),
+        "top_rv_score": top_row.get("rv_score"),
+    }
+
+
+def load_expected_output(expected_path: Path | None) -> tuple[dict | None, str | None]:
+    if expected_path is None:
+        return None, None
+    if not expected_path.exists():
+        return None, f"Expected output file not found: {expected_path}"
+    try:
+        return json.loads(expected_path.read_text(encoding="utf-8")), None
+    except Exception as exc:
+        return None, f"Could not read expected output file: {exc}"
+
+
+def should_apply_expected_output(payload: dict, diagnostics: dict, explicit_expected_file: bool) -> tuple[bool, str]:
+    if explicit_expected_file:
+        return True, "explicit expected file"
+    expected_issuer = _expected_field(payload, "selected_issuer", payload.get("issuer"))
+    if not expected_issuer:
+        return True, "expected file has no issuer gate"
+    actual_issuer = str(diagnostics.get("selected_issuer", "")).upper()
+    if actual_issuer == str(expected_issuer).upper():
+        return True, f"issuer matched {expected_issuer}"
+    return False, f"expected issuer {expected_issuer}; actual issuer {diagnostics.get('selected_issuer')}"
+
+
+def compare_expected_outputs(checks: list[dict], expected_payload: dict, diagnostics: dict) -> None:
+    expected = expected_payload.get("expected", expected_payload)
+    actuals = _actual_expected_values(diagnostics)
+    compared = 0
+    for key, entry in expected.items():
+        if key not in actuals:
+            continue
+        expected_value, tolerance = _expected_value_and_tolerance(entry)
+        actual_value = actuals.get(key)
+        if tolerance is None:
+            condition = str(actual_value) == str(expected_value)
+            detail = f"actual={actual_value}; expected={expected_value}"
+        else:
+            actual_num = _to_float(actual_value)
+            expected_num = _to_float(expected_value)
+            condition = actual_num is not None and expected_num is not None and abs(actual_num - expected_num) <= tolerance
+            detail = f"actual={actual_value}; expected={expected_value} +/- {tolerance}"
+        add_check(checks, f"Expected output: {key}", condition, detail)
+        compared += 1
+    add_check(checks, "Expected output fields compared", compared > 0, f"fields={compared}")
 
 
 def compile_project() -> tuple[bool, list[str]]:
@@ -296,6 +392,7 @@ def build_regression_context(
         else f"Median liquidity score is {liquidity_series.median():.1f}; top score is {liquidity_series.max():.1f}.",
         f"Benchmark source: {benchmark_source_mode}; policy: {benchmark_conflict_policy}.",
     ]
+    trust_layers = methodology_trust_layers(benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
 
     context = {
         "title": f"{selected_issuer} Regression Report",
@@ -313,11 +410,13 @@ def build_regression_context(
         "chart_explanations": focused_core_chart_explanations(selected_issuer, "Unknown", benchmark_source_mode),
         "warning_rows": warning_rows,
         "cusip_summary": cusip_summary,
+        "methodology_trust_layers": trust_layers,
         "benchmark_source_mode": benchmark_source_mode,
         "benchmark_priority": benchmark_priority,
         "benchmark_conflict_policy": benchmark_conflict_policy,
         "top_candidate_note": "",
     }
+    review_items = analyst_review_items(context)
 
     diagnostics = {
         "trade_path": str(trade_path),
@@ -349,6 +448,9 @@ def build_regression_context(
         "movement_ladder_shape": list(movement_ladder.shape),
         "level_ladder_shape": list(level_ladder.shape),
         "curve_snapshot_rows": len(curve_snapshot),
+        "methodology_trust_layer_count": len(trust_layers),
+        "methodology_trust_row_count": int(sum(len(df) for df in trust_layers.values())),
+        "analyst_review_item_count": len(review_items),
     }
     return context, diagnostics
 
@@ -394,6 +496,8 @@ def write_report(output_dir: Path, context: dict, diagnostics: dict, checks: lis
         f"- Median liquidity: `{diagnostics['median_liquidity']}`",
         f"- Benchmark source: `{diagnostics['benchmark_source_mode']}`",
         f"- Benchmark policy: `{diagnostics['benchmark_conflict_policy']}`",
+        f"- Expected output file: `{diagnostics.get('expected_file') or 'not applied'}`",
+        f"- Expected output applied: `{diagnostics.get('expected_output_applied')}`",
         "",
         "## Checks",
     ]
@@ -469,6 +573,8 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/secondary_market_regression"), help="Directory for Markdown/JSON/export artifacts.")
     parser.add_argument("--ratings", nargs="+", default=["AAA", "AA"], help="Benchmark ratings used by regression checks.")
     parser.add_argument("--curve-lookback-days", type=int, default=60)
+    parser.add_argument("--expected-file", type=Path, help="Optional expected-output JSON. Defaults to the LADWP golden file when issuer matches.")
+    parser.add_argument("--skip-expected", action="store_true", help="Skip golden expected-output comparisons.")
     parser.add_argument("--skip-compile", action="store_true", help="Skip py_compile checks.")
     parser.add_argument("--skip-streamlit", action="store_true", help="Skip Streamlit startup smoke.")
     parser.add_argument("--streamlit-port", type=int, default=8521)
@@ -495,6 +601,9 @@ def main() -> int:
         ratings=args.ratings,
         curve_lookback_days=args.curve_lookback_days,
     )
+    expected_file = args.expected_file or DEFAULT_EXPECTED_FILE
+    diagnostics["expected_file"] = None
+    diagnostics["expected_output_applied"] = False
 
     trade_report = diagnostics["trade_report"]
     mmd_report = diagnostics["mmd_report"] or {"can_run": False, "missing_required": ["missing mmd"]}
@@ -511,6 +620,33 @@ def main() -> int:
     add_check(checks, "Movement ladder generated", diagnostics["movement_ladder_shape"][0] > 0, f"shape={diagnostics['movement_ladder_shape']}")
     add_check(checks, "Level ladder generated", diagnostics["level_ladder_shape"][0] > 0, f"shape={diagnostics['level_ladder_shape']}")
     add_check(checks, "Issuer curve snapshot generated", diagnostics["curve_snapshot_rows"] > 0, f"rows={diagnostics['curve_snapshot_rows']:,}")
+    add_check(
+        checks,
+        "Methodology trust layers generated",
+        diagnostics["methodology_trust_layer_count"] >= 4 and diagnostics["methodology_trust_row_count"] >= 12,
+        f"layers={diagnostics['methodology_trust_layer_count']}; rows={diagnostics['methodology_trust_row_count']}",
+    )
+    add_check(
+        checks,
+        "Analyst review checklist generated",
+        diagnostics["analyst_review_item_count"] >= 6,
+        f"items={diagnostics['analyst_review_item_count']}",
+    )
+
+    if not args.skip_expected:
+        expected_payload, expected_error = load_expected_output(expected_file)
+        if expected_payload is None:
+            add_check(checks, "Expected output file loaded", args.expected_file is None, expected_error or "No expected file configured")
+        else:
+            should_apply, apply_reason = should_apply_expected_output(expected_payload, diagnostics, explicit_expected_file=args.expected_file is not None)
+            diagnostics["expected_file"] = str(expected_file)
+            diagnostics["expected_output_apply_reason"] = apply_reason
+            if should_apply:
+                add_check(checks, "Expected output file loaded", True, expected_file)
+                diagnostics["expected_output_applied"] = True
+                compare_expected_outputs(checks, expected_payload, diagnostics)
+            else:
+                add_check(checks, "Expected output skipped", True, apply_reason)
 
     if not args.skip_streamlit:
         smoke = streamlit_smoke(args.streamlit_port, args.streamlit_timeout)

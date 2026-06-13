@@ -7,6 +7,8 @@ import zipfile
 
 import pandas as pd
 
+from engine.methodology import methodology_trust_layers
+
 
 def _make_unique_columns(columns) -> list[str]:
     counts: dict[str, int] = {}
@@ -118,6 +120,17 @@ def focused_report_html_table(df: pd.DataFrame, max_rows: int = 30) -> str:
 def focused_report_filename(label: str, suffix: str) -> str:
     safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(label)).strip("_") or "secondary_market_report"
     return f"{safe_label}_{suffix}"
+
+
+def _context_trust_layers(context: dict) -> dict[str, pd.DataFrame]:
+    existing = context.get("methodology_trust_layers")
+    if isinstance(existing, dict):
+        return existing
+    return methodology_trust_layers(
+        benchmark_source_mode=str(context.get("benchmark_source_mode", "")),
+        benchmark_priority=str(context.get("benchmark_priority", "")),
+        benchmark_conflict_policy=str(context.get("benchmark_conflict_policy", "")),
+    )
 
 
 def focused_methodology_appendix(
@@ -254,6 +267,9 @@ def focused_report_markdown(context: dict, include_watchlist: bool = True, inclu
     lines.extend(["## Methodology Warnings", "", focused_report_markdown_table(context["warning_rows"], max_rows=10), ""])
 
     if include_methodology:
+        lines.extend(["## Methodology Trust Layer", ""])
+        for layer_name, layer_df in _context_trust_layers(context).items():
+            lines.extend([f"### {layer_name}", "", focused_report_markdown_table(layer_df, max_rows=30), ""])
         lines.extend(["## Methodology Appendix", "", focused_report_markdown_table(context["methodology"], max_rows=30), ""])
 
     lines.extend(
@@ -281,7 +297,17 @@ def focused_report_html(context: dict, include_watchlist: bool = True, include_m
 """
     methodology_section = ""
     if include_methodology:
+        trust_html = "".join(
+            f"""
+<section>
+  <h2>Methodology Trust Layer: {_html_escape(layer_name)}</h2>
+  {focused_report_html_table(layer_df, max_rows=30)}
+</section>
+"""
+            for layer_name, layer_df in _context_trust_layers(context).items()
+        )
         methodology_section = f"""
+{trust_html}
 <section>
   <h2>Methodology Appendix</h2>
   {focused_report_html_table(context["methodology"], max_rows=30)}
@@ -351,6 +377,9 @@ def focused_report_bundle_bytes(context: dict, markdown: str, html_report: str) 
         zf.writestr("chart_guide.csv", context["chart_explanations"].to_csv(index=False))
         zf.writestr("methodology_appendix.csv", context["methodology"].to_csv(index=False))
         zf.writestr("methodology_warnings.csv", context["warning_rows"].to_csv(index=False))
+        for layer_name, layer_df in _context_trust_layers(context).items():
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(layer_name)).strip("_").lower()
+            zf.writestr(f"methodology_trust_{safe_name}.csv", layer_df.to_csv(index=False))
     return buffer.getvalue()
 
 
@@ -407,6 +436,9 @@ def focused_report_pdf_bytes(context: dict) -> tuple[bytes | None, str | None]:
                 Spacer(1, 12),
                 Paragraph("Saved Watchlist", styles["Heading2"]),
                 small_table(context["saved_watchlist"], max_rows=8) if not context["saved_watchlist"].empty else Paragraph("No saved watchlist rows.", styles["BodyText"]),
+                Spacer(1, 12),
+                Paragraph("Methodology Trust Layer", styles["Heading2"]),
+                small_table(_context_trust_layers(context)["Benchmark Policy"], max_rows=6),
                 Spacer(1, 12),
                 Paragraph("Methodology Appendix", styles["Heading2"]),
                 small_table(context["methodology"], max_rows=10),
