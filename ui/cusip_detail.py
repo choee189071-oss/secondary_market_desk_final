@@ -150,7 +150,6 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
     latest_yield = latest_trade_row["yield"].iloc[0] if not latest_trade_row.empty and "yield" in latest_trade_row.columns else pd.NA
     latest_price = latest_trade_row["price"].iloc[0] if not latest_trade_row.empty and "price" in latest_trade_row.columns else pd.NA
     total_par = pd.to_numeric(detail_sorted["trade_amount"], errors="coerce").sum()
-    avg_trade_size = pd.to_numeric(detail_sorted["trade_amount"], errors="coerce").mean()
 
     path = (
         detail_sorted.dropna(subset=["trade_date"])
@@ -236,78 +235,113 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
 
     st.subheader("Trade Path")
     if not path.empty:
+        path_panels = st.multiselect(
+            "Path Panels",
+            ["Spread", "Yield", "Price", "Par"],
+            default=["Spread", "Par"],
+            key=f"cusip_path_panels_{selected_cusip}",
+            help="Spread is the primary panel. Add yield, price, or par as needed.",
+        )
+        if "Spread" not in path_panels:
+            path_panels = ["Spread"] + path_panels
+
+        subplot_titles = []
+        specs = []
+        row_heights = []
+        if "Spread" in path_panels:
+            subplot_titles.append("Spread Path")
+            specs.append([{}])
+            row_heights.append(0.50)
+        if "Yield" in path_panels or "Price" in path_panels:
+            subplot_titles.append("Yield / Price")
+            specs.append([{"secondary_y": True}])
+            row_heights.append(0.30)
+        if "Par" in path_panels:
+            subplot_titles.append("Par Amount")
+            specs.append([{}])
+            row_heights.append(0.20)
+        total_height = sum(row_heights) or 1
+        row_heights = [x / total_height for x in row_heights]
+
         fig_path = make_subplots(
-            rows=3,
+            rows=len(subplot_titles),
             cols=1,
             shared_xaxes=True,
             vertical_spacing=0.08,
-            row_heights=[0.42, 0.30, 0.28],
-            subplot_titles=("Spread Path", "Yield / Price", "Par Amount"),
-            specs=[[{}], [{"secondary_y": True}], [{}]],
+            row_heights=row_heights,
+            subplot_titles=tuple(subplot_titles),
+            specs=specs,
         )
-        if pd.to_numeric(path["spread_bps"], errors="coerce").notna().any():
+        row_idx = 1
+        if "Spread" in path_panels:
+            if pd.to_numeric(path["spread_bps"], errors="coerce").notna().any():
+                fig_path.add_trace(
+                    go.Scatter(
+                        x=path["trade_date"],
+                        y=path["spread_bps"],
+                        mode="lines+markers",
+                        name="Spread",
+                        line=dict(width=3),
+                        customdata=np.stack([path["trade_count"].fillna(0), path["par"].fillna(0)], axis=-1),
+                        hovertemplate="%{x|%m/%d/%Y}<br>Spread: %{y:.1f} bps<br>Trades: %{customdata[0]:,.0f}<br>Par: $%{customdata[1]:,.0f}<extra>Spread</extra>",
+                    ),
+                    row=row_idx,
+                    col=1,
+                )
+            fig_path.update_yaxes(title_text="Spread (bps)", row=row_idx, col=1)
+            row_idx += 1
+        if "Yield" in path_panels or "Price" in path_panels:
+            panel_row = row_idx
+            if "Yield" in path_panels and pd.to_numeric(path["avg_yield"], errors="coerce").notna().any():
+                fig_path.add_trace(
+                    go.Scatter(
+                        x=path["trade_date"],
+                        y=path["avg_yield"],
+                        mode="lines+markers",
+                        name="Yield",
+                        line=dict(width=2.4),
+                        hovertemplate="%{x|%m/%d/%Y}<br>Yield: %{y:.3f}%<extra>Yield</extra>",
+                    ),
+                    row=panel_row,
+                    col=1,
+                    secondary_y=False,
+                )
+                fig_path.update_yaxes(title_text="Yield (%)", row=panel_row, col=1, secondary_y=False)
+            if "Price" in path_panels and pd.to_numeric(path["avg_price"], errors="coerce").notna().any():
+                fig_path.add_trace(
+                    go.Scatter(
+                        x=path["trade_date"],
+                        y=path["avg_price"],
+                        mode="lines+markers",
+                        name="Price",
+                        line=dict(width=2.0, dash="dash"),
+                        hovertemplate="%{x|%m/%d/%Y}<br>Price: %{y:.2f}<extra>Price</extra>",
+                    ),
+                    row=panel_row,
+                    col=1,
+                    secondary_y=True,
+                )
+                fig_path.update_yaxes(title_text="Price", row=panel_row, col=1, secondary_y=True)
+            row_idx += 1
+        if "Par" in path_panels:
             fig_path.add_trace(
-                go.Scatter(
+                go.Bar(
                     x=path["trade_date"],
-                    y=path["spread_bps"],
-                    mode="lines+markers",
-                    name="Spread",
-                    line=dict(width=3),
-                    customdata=np.stack([path["trade_count"].fillna(0), path["par"].fillna(0)], axis=-1),
-                    hovertemplate="%{x|%m/%d/%Y}<br>Spread: %{y:.1f} bps<br>Trades: %{customdata[0]:,.0f}<br>Par: $%{customdata[1]:,.0f}<extra>Spread</extra>",
+                    y=path["par"],
+                    name="Par amount",
+                    hovertemplate="%{x|%m/%d/%Y}<br>Par: $%{y:,.0f}<extra>Par amount</extra>",
                 ),
-                row=1,
+                row=row_idx,
                 col=1,
             )
-        if pd.to_numeric(path["avg_yield"], errors="coerce").notna().any():
-            fig_path.add_trace(
-                go.Scatter(
-                    x=path["trade_date"],
-                    y=path["avg_yield"],
-                    mode="lines+markers",
-                    name="Yield",
-                    line=dict(width=2.4),
-                    hovertemplate="%{x|%m/%d/%Y}<br>Yield: %{y:.3f}%<extra>Yield</extra>",
-                ),
-                row=2,
-                col=1,
-                secondary_y=False,
-            )
-        if pd.to_numeric(path["avg_price"], errors="coerce").notna().any():
-            fig_path.add_trace(
-                go.Scatter(
-                    x=path["trade_date"],
-                    y=path["avg_price"],
-                    mode="lines+markers",
-                    name="Price",
-                    line=dict(width=2.0, dash="dash"),
-                    hovertemplate="%{x|%m/%d/%Y}<br>Price: %{y:.2f}<extra>Price</extra>",
-                ),
-                row=2,
-                col=1,
-                secondary_y=True,
-            )
-        fig_path.add_trace(
-            go.Bar(
-                x=path["trade_date"],
-                y=path["par"],
-                name="Par amount",
-                hovertemplate="%{x|%m/%d/%Y}<br>Par: $%{y:,.0f}<extra>Par amount</extra>",
-            ),
-            row=3,
-            col=1,
-        )
+            fig_path.update_yaxes(title_text="Par", row=row_idx, col=1)
         fig_path.update_layout(
             title=f"{selected_cusip} Trade Path",
-            height=720,
+            height=760 if len(subplot_titles) >= 3 else 640,
             hovermode="x unified",
             legend_title_text="Series",
             margin=dict(l=40, r=50, t=85, b=45),
         )
-        fig_path.update_yaxes(title_text="Spread (bps)", row=1, col=1)
-        fig_path.update_yaxes(title_text="Yield (%)", row=2, col=1, secondary_y=False)
-        fig_path.update_yaxes(title_text="Price", row=2, col=1, secondary_y=True)
-        fig_path.update_yaxes(title_text="Par", row=3, col=1)
         safe_plotly_chart(fig_path, width="stretch")
         with st.expander("Trade path data", expanded=False):
             safe_dataframe(path, hide_index=True, auto_collapse=False)
@@ -328,10 +362,55 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
         if not peers.empty and pd.notna(peer_median_spread):
             selected_gap = peers.loc[peers["is_selected"], "peer_median_gap_bps"]
             selected_gap_val = selected_gap.iloc[0] if not selected_gap.empty else pd.NA
-            st.info(
-                f"Same-bucket median spread is {_fmt_bps(peer_median_spread)}. "
-                f"{selected_cusip} screens {_fmt_bps(selected_gap_val)} versus that peer median."
-            )
+            p1, p2, p3 = st.columns(3)
+            with p1:
+                clean_metric_card("Peer Median", _fmt_bps(peer_median_spread), size="small")
+            with p2:
+                clean_metric_card("Selected Gap", _fmt_bps(selected_gap_val), size="small")
+            with p3:
+                clean_metric_card("Peer Count", f"{len(peers):,}", size="small")
+            peer_chart = pd.concat([peers[peers["is_selected"]], peers[~peers["is_selected"]].head(7)], ignore_index=True)
+            peer_chart = peer_chart.drop_duplicates(subset=["cusip"]).copy()
+            peer_chart["peer_median_gap_bps"] = pd.to_numeric(peer_chart["peer_median_gap_bps"], errors="coerce")
+            peer_chart = peer_chart.dropna(subset=["peer_median_gap_bps"])
+            if not peer_chart.empty:
+                peer_fig = go.Figure()
+                liq_series = pd.to_numeric(
+                    peer_chart["liquidity_score"] if "liquidity_score" in peer_chart.columns else pd.Series(np.nan, index=peer_chart.index),
+                    errors="coerce",
+                )
+                rv_series = pd.to_numeric(
+                    peer_chart["rv_score"] if "rv_score" in peer_chart.columns else pd.Series(np.nan, index=peer_chart.index),
+                    errors="coerce",
+                )
+                peer_fig.add_trace(
+                    go.Bar(
+                        x=peer_chart["cusip"].astype(str),
+                        y=peer_chart["peer_median_gap_bps"],
+                        marker_color=np.where(peer_chart["is_selected"], "#e11d48", "#2f7f73"),
+                        customdata=np.stack(
+                            [
+                                liq_series.fillna(np.nan),
+                                rv_series.fillna(np.nan),
+                            ],
+                            axis=-1,
+                        ),
+                        hovertemplate=(
+                            "%{x}<br>Peer gap: %{y:.1f} bps<br>"
+                            "Liquidity: %{customdata[0]:.1f}<br>"
+                            "RV: %{customdata[1]:.1f}<extra></extra>"
+                        ),
+                    )
+                )
+                peer_fig.add_hline(y=0, line_dash="dash", line_width=1)
+                peer_fig.update_layout(
+                    title="Same-Bucket Peer Gap",
+                    height=320,
+                    margin=dict(l=40, r=30, t=58, b=50),
+                    yaxis_title="Gap to peer median (bps)",
+                    xaxis_title="CUSIP",
+                )
+                safe_plotly_chart(peer_fig, width="stretch")
         peer_cols = [
             "cusip", "is_selected", "signal", "current_spread_bps", "peer_median_gap_bps",
             "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
@@ -407,9 +486,17 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
             clean_metric_card("Top Liquidity", _fmt_num(ranked["liquidity_score"].max()), size="small")
         with r4:
             clean_metric_card("Median Peer Gap", _fmt_bps(ranked["peer_median_gap_bps"].median()), size="small")
-        st.caption("Top 10. Expand for more.")
-        safe_dataframe(ranked[[c for c in display_cols if c in ranked.columns]].head(10), hide_index=True, auto_collapse=False)
-        with st.expander("Full opportunity ranking preview", expanded=False):
+        top_cards = ranked.head(3)
+        card_cols = st.columns(len(top_cards))
+        for idx, (_, row) in enumerate(top_cards.iterrows()):
+            with card_cols[idx]:
+                clean_metric_card(
+                    str(row.get("cusip", "N/A")),
+                    row.get("signal", "Monitor"),
+                    size="small",
+                    note=f"RV {_fmt_num(row.get('rv_score'))} | Spread {_fmt_bps(row.get('current_spread_bps'))}",
+                )
+        with st.expander("Opportunity ranking table", expanded=False):
             safe_dataframe(ranked[[c for c in display_cols if c in ranked.columns]].head(50), hide_index=True)
 
     st.subheader("Watchlist")

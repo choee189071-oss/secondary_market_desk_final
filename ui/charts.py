@@ -13,7 +13,7 @@ from engine.benchmark import (
     get_benchmark_curve,
 )
 from engine.scoring import add_workflow_spread_bps as _add_workflow_spread_bps
-from ui.common import safe_dataframe, safe_plotly_chart, section_anchor
+from ui.common import _fmt_bps, _fmt_date, _fmt_mm, clean_metric_card, safe_dataframe, safe_plotly_chart, section_anchor
 
 
 def render_focused_core_charts(
@@ -53,40 +53,42 @@ def render_focused_core_charts(
         st.warning("Core charts require valid trade_date values.")
         return
 
-    ctrl1, ctrl2, ctrl3 = st.columns([1, 1, 1.4])
+    st.caption("Chart controls")
+    ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([0.85, 1.45, 0.95, 0.95])
     with ctrl1:
         trend_frequency = st.selectbox(
-            "Trend Frequency",
+            "Frequency",
             ["Daily", "Weekly", "Monthly"],
             index=1,
             key="focused_core_trend_frequency",
         )
     with ctrl2:
+        date_min = chart_dates.min().date()
+        date_max = chart_dates.max().date()
+        selected_chart_dates = st.date_input(
+            "Date Range",
+            value=(date_min, date_max),
+            min_value=date_min,
+            max_value=date_max,
+            key="focused_core_chart_date_range",
+            help="Filters chart data.",
+        )
+    with ctrl3:
         curve_benchmark_rating = st.selectbox(
-            "Curve Benchmark",
+            "Benchmark",
             BENCHMARK_RATINGS,
             index=0,
             key="focused_core_curve_benchmark",
         )
-    with ctrl3:
-        reference_lines = st.multiselect(
-            "Reference Lines",
-            ["Sector median", "All uploaded median", "AAA/MMD baseline", "MMD benchmark curve"],
-            default=["Sector median", "All uploaded median"],
-            key="focused_core_reference_lines",
-            help="MMD benchmark curve applies to the issuer curve when benchmark data is available. AAA/MMD baseline is 0 bps on spread charts.",
+    with ctrl4:
+        curve_lookback = st.selectbox(
+            "Curve Lookback",
+            [7, 14, 30, 60, 90, 180, 365],
+            index=3,
+            format_func=lambda x: f"{x}D",
+            key="focused_core_curve_lookback",
         )
 
-    date_min = chart_dates.min().date()
-    date_max = chart_dates.max().date()
-    selected_chart_dates = st.date_input(
-        "Chart Date Range",
-        value=(date_min, date_max),
-        min_value=date_min,
-        max_value=date_max,
-        key="focused_core_chart_date_range",
-        help="Filters the focused core charts. Sidebar zoom only changes the visual viewport; this changes the chart data.",
-    )
     chart_start_date, chart_end_date = date_min, date_max
     if isinstance(selected_chart_dates, tuple) and len(selected_chart_dates) == 2:
         chart_start_date, chart_end_date = selected_chart_dates
@@ -95,13 +97,39 @@ def render_focused_core_charts(
             & (chart_base_all["trade_date"].dt.date <= chart_end_date)
         ].copy()
 
-    visible_charts = st.multiselect(
-        "Visible Chart Modules",
-        ["Spread Trend", "Volume & Activity", "Issuer Curve"],
-        default=["Spread Trend"],
-        key="focused_core_visible_charts",
-        help="Default is short. Add modules as needed.",
-    )
+    mod1, mod2, mod3, ref1, ref2, ref3, ref4 = st.columns([0.95, 0.95, 0.9, 0.8, 0.8, 0.8, 0.95])
+    with mod1:
+        show_spread = st.checkbox("Spread", value=True, key="focused_core_show_spread")
+    with mod2:
+        show_volume = st.checkbox("Volume", value=False, key="focused_core_show_volume")
+    with mod3:
+        show_curve = st.checkbox("Curve", value=False, key="focused_core_show_curve")
+    with ref1:
+        ref_sector = st.checkbox("Sector", value=True, key="focused_core_ref_sector")
+    with ref2:
+        ref_universe = st.checkbox("Universe", value=True, key="focused_core_ref_universe")
+    with ref3:
+        ref_baseline = st.checkbox("Baseline", value=False, key="focused_core_ref_baseline")
+    with ref4:
+        ref_mmd_curve = st.checkbox("MMD curve", value=False, key="focused_core_ref_mmd_curve")
+
+    visible_charts = []
+    if show_spread:
+        visible_charts.append("Spread Trend")
+    if show_volume:
+        visible_charts.append("Volume & Activity")
+    if show_curve:
+        visible_charts.append("Issuer Curve")
+
+    reference_lines = []
+    if ref_sector:
+        reference_lines.append("Sector median")
+    if ref_universe:
+        reference_lines.append("All uploaded median")
+    if ref_baseline:
+        reference_lines.append("AAA/MMD baseline")
+    if ref_mmd_curve:
+        reference_lines.append("MMD benchmark curve")
 
     freq_map = {"Daily": "D", "Weekly": "W", "Monthly": "M"}
     period_freq = freq_map.get(trend_frequency, "W")
@@ -138,6 +166,7 @@ def render_focused_core_charts(
                     mode="lines+markers",
                     name=issuer_name,
                     line=dict(width=3.2 if issuer_name == selected_issuer else 2.1),
+                    marker=dict(size=8 if issuer_name == selected_issuer else 6),
                     customdata=np.stack(
                         [
                             tmp["trade_count"].fillna(0),
@@ -149,8 +178,8 @@ def render_focused_core_charts(
                     hovertemplate=(
                         "%{x|%m/%d/%Y}<br>"
                         "Spread: %{y:.1f} bps<br>"
-                        "Trades: %{customdata[0]:,.0f}<br>"
-                        "Par: $%{customdata[1]:,.0f}<br>"
+                        "Period trades: %{customdata[0]:,.0f}<br>"
+                        "Period par: $%{customdata[1]:,.0f}<br>"
                         "Avg yield: %{customdata[2]:.3f}%"
                         "<extra>%{fullData.name}</extra>"
                     ),
@@ -202,11 +231,26 @@ def render_focused_core_charts(
                 xaxis_title="Trade Date",
                 yaxis_title="Spread (bps)",
                 hovermode="x unified",
-                height=520,
+                height=660,
                 legend_title_text="Line Item",
-                margin=dict(l=40, r=40, t=70, b=45),
+                margin=dict(l=44, r=34, t=72, b=45),
             )
             safe_plotly_chart(fig, width="stretch")
+            selected_trend = spread_trend[spread_trend["issuer"].astype(str) == str(selected_issuer)].copy()
+            if not selected_trend.empty:
+                selected_trend = selected_trend.sort_values("trade_date")
+                latest = selected_trend.iloc[-1]
+                first = selected_trend.iloc[0]
+                spread_change = pd.to_numeric(pd.Series([latest.get("spread_bps")]), errors="coerce").iloc[0] - pd.to_numeric(pd.Series([first.get("spread_bps")]), errors="coerce").iloc[0]
+                ev1, ev2, ev3, ev4 = st.columns(4)
+                with ev1:
+                    clean_metric_card("Latest Spread", _fmt_bps(latest.get("spread_bps")), size="small", note=_fmt_date(latest.get("trade_date")))
+                with ev2:
+                    clean_metric_card("Path Change", _fmt_bps(spread_change), size="small", note=f"{len(selected_trend):,} periods")
+                with ev3:
+                    clean_metric_card("Trades", f"{pd.to_numeric(selected_trend['trade_count'], errors='coerce').sum():,.0f}", size="small")
+                with ev4:
+                    clean_metric_card("Par", _fmt_mm(pd.to_numeric(selected_trend["total_par"], errors="coerce").sum()), size="small")
             with st.expander("Spread trend data", expanded=False):
                 safe_dataframe(spread_trend, hide_index=True, top_rows=8)
         else:
@@ -322,14 +366,6 @@ def render_focused_core_charts(
         st.info("Issuer curve needs maturity_year and yield fields.")
         return
 
-    curve_lookback = st.select_slider(
-        "Issuer Curve Lookback",
-        options=[7, 14, 30, 60, 90, 180, 365],
-        value=60,
-        format_func=lambda x: f"{x} days",
-        key="focused_core_curve_lookback",
-        help="Uses selected issuer trades inside this lookback window ending on the latest selected trade date.",
-    )
     curve_source["trade_date"] = pd.to_datetime(curve_source.get("trade_date"), errors="coerce")
     if "trade_date" in curve_source.columns:
         curve_source = curve_source[
