@@ -2007,6 +2007,556 @@ def _focused_watchlist_markdown(saved_df: pd.DataFrame, issuer: str) -> str:
     return "\n".join(lines)
 
 
+def _focused_summary_with_peer_gaps(summary: pd.DataFrame) -> pd.DataFrame:
+    """Add same-bucket peer spread gaps used by RV, watchlist, and report output."""
+    if summary is None or summary.empty:
+        return pd.DataFrame()
+    out = summary.copy()
+    if "maturity_bucket" in out.columns and "current_spread_bps" in out.columns:
+        out["peer_median_spread_bps"] = out.groupby("maturity_bucket")["current_spread_bps"].transform("median")
+        out["peer_median_gap_bps"] = (
+            pd.to_numeric(out["current_spread_bps"], errors="coerce")
+            - pd.to_numeric(out["peer_median_spread_bps"], errors="coerce")
+        )
+    elif "peer_median_gap_bps" not in out.columns:
+        out["peer_median_gap_bps"] = pd.NA
+    return out
+
+
+def _focused_report_value(value: object, empty: str = "N/A") -> str:
+    if value is None:
+        return empty
+    try:
+        if pd.isna(value):
+            return empty
+    except Exception:
+        pass
+    return str(value)
+
+
+def _focused_report_markdown_table(df: pd.DataFrame, max_rows: int = 20) -> str:
+    """Dependency-free Markdown table writer; pandas.to_markdown needs tabulate."""
+    if df is None or df.empty:
+        return "_No rows available._"
+    display_df = prepare_display_dataframe(df, max_rows=max_rows)
+    if display_df.empty:
+        return "_No rows available._"
+
+    def clean_cell(value: object) -> str:
+        text = _focused_report_value(value, "")
+        text = text.replace("\n", " ").replace("|", "\\|")
+        return text
+
+    cols = [str(c) for c in display_df.columns]
+    lines = [
+        "| " + " | ".join(cols) + " |",
+        "| " + " | ".join(["---"] * len(cols)) + " |",
+    ]
+    for _, row in display_df.iterrows():
+        lines.append("| " + " | ".join(clean_cell(row.get(c)) for c in display_df.columns) + " |")
+    if len(df) > len(display_df):
+        lines.append(f"\n_Showing first {len(display_df):,} of {len(df):,} rows._")
+    return "\n".join(lines)
+
+
+def _focused_report_html_table(df: pd.DataFrame, max_rows: int = 30) -> str:
+    if df is None or df.empty:
+        return "<p class='muted'>No rows available.</p>"
+    display_df = prepare_display_dataframe(df, max_rows=max_rows)
+    if display_df.empty:
+        return "<p class='muted'>No rows available.</p>"
+    note = ""
+    if len(df) > len(display_df):
+        note = f"<p class='muted'>Showing first {len(display_df):,} of {len(df):,} rows.</p>"
+    return display_df.to_html(index=False, classes="report-table", border=0, escape=True) + note
+
+
+def _focused_report_filename(label: str, suffix: str) -> str:
+    safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(label)).strip("_") or "secondary_market_report"
+    return f"{safe_label}_{suffix}"
+
+
+def _focused_methodology_appendix(
+    mmd_df: pd.DataFrame,
+    benchmark_source_mode: str,
+    benchmark_priority: str,
+    benchmark_conflict_policy: str,
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Section": "Benchmark",
+                "Policy": "Uploaded MMD role",
+                "Current treatment": "Uploaded MMD is treated as the AAA benchmark curve when external MMD fallback is active.",
+                "Audit evidence": f"{len(mmd_df) if isinstance(mmd_df, pd.DataFrame) else 0:,} MMD row(s) loaded.",
+            },
+            {
+                "Section": "Benchmark",
+                "Policy": "Active benchmark source",
+                "Current treatment": benchmark_source_mode,
+                "Audit evidence": benchmark_priority,
+            },
+            {
+                "Section": "Benchmark",
+                "Policy": "Conflict policy",
+                "Current treatment": benchmark_conflict_policy,
+                "Audit evidence": "Trade-sheet index rates and uploaded MMD are not blended in the same run.",
+            },
+            {
+                "Section": "Spread",
+                "Policy": "Spread calculation",
+                "Current treatment": "Issuer yield minus active benchmark yield, shown in basis points.",
+                "Audit evidence": "Uses trade-sheet spread when present; otherwise derives from yield and index_rate.",
+            },
+            {
+                "Section": "Peer grouping",
+                "Policy": "Ratings fallback",
+                "Current treatment": "Ratings can guide peer grouping when available; missing ratings fall back to sector and maturity.",
+                "Audit evidence": "Rating effects remain separate from the benchmark spread.",
+            },
+            {
+                "Section": "Attribution",
+                "Policy": "Callable, liquidity, and sector effects",
+                "Current treatment": "Displayed as separate attribution layers rather than embedded into benchmark spread.",
+                "Audit evidence": "This preserves benchmark explainability.",
+            },
+            {
+                "Section": "Liquidity",
+                "Policy": "Liquidity score",
+                "Current treatment": "Screening score based on trade count, total par amount, and recency.",
+                "Audit evidence": "Higher score means more observable trading support in the uploaded file.",
+            },
+            {
+                "Section": "RV",
+                "Policy": "RV score",
+                "Current treatment": "Screening score combining spread rank and liquidity rank.",
+                "Audit evidence": "Output is a shortlist aid, not an investment recommendation.",
+            },
+            {
+                "Section": "Watchlist",
+                "Policy": "Saved candidates",
+                "Current treatment": "Saved CUSIPs and notes are stored in the active Streamlit session.",
+                "Audit evidence": "Download watchlist CSV/Markdown or report bundle before clearing the session.",
+            },
+            {
+                "Section": "Export",
+                "Policy": "Report reproducibility",
+                "Current treatment": "Reports are regenerated from the current uploaded data, issuer selection, and saved watchlist.",
+                "Audit evidence": "Interactive Streamlit widget state is summarized, not pixel-copied.",
+            },
+        ]
+    )
+
+
+def _focused_core_chart_explanations(selected_issuer: str, selected_sector: str, benchmark_source_mode: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Chart": "Spread Trend",
+                "Question answered": "Is the issuer trading wider or tighter over time?",
+                "How to read": f"Primary line tracks {selected_issuer} median spread by selected frequency; reference lines compare against {selected_sector or 'sector'} and uploaded-universe medians.",
+                "Methodology note": f"Spread source follows active benchmark policy: {benchmark_source_mode}.",
+            },
+            {
+                "Chart": "Volume & Activity",
+                "Question answered": "Is observed trading support strong enough to trust the signal?",
+                "How to read": "Bars show par traded; lower panel shows trade count and selected issuer share of uploaded activity.",
+                "Methodology note": "Volume supports liquidity confidence but does not change benchmark spread.",
+            },
+            {
+                "Chart": "Issuer Curve",
+                "Question answered": "Where does the issuer curve sit by maturity?",
+                "How to read": "Issuer average yield by maturity is compared with sector, uploaded universe, and optional MMD/rating benchmark curves.",
+                "Methodology note": "External MMD is treated as AAA; rating assumptions are disclosed in the appendix.",
+            },
+            {
+                "Chart": "CUSIP Trade Path",
+                "Question answered": "What happened to the selected bond through time?",
+                "How to read": "Spread, yield/price, and par panels show path, magnitude, and support for a saved candidate.",
+                "Methodology note": "CUSIP path uses only uploaded trades for that CUSIP.",
+            },
+        ]
+    )
+
+
+def _build_focused_report_context(
+    report_title: str,
+    prepared_for: str,
+    analyst_note: str,
+    selected_issuer: str,
+    selected_sector: str,
+    market_df: pd.DataFrame,
+    issuer_trades: pd.DataFrame,
+    issuer_bonds: pd.DataFrame,
+    mmd_df: pd.DataFrame,
+    benchmark_source_mode: str,
+    benchmark_priority: str,
+    benchmark_conflict_policy: str,
+) -> dict:
+    issuer_base = _add_workflow_spread_bps(issuer_trades)
+    market_base = _add_workflow_spread_bps(market_df)
+    cusip_summary = _focused_summary_with_peer_gaps(_build_workflow_cusip_summary(issuer_base))
+    saved_watchlist = _focused_watchlist_dataframe(cusip_summary)
+    top_opportunities = cusip_summary.head(5).copy()
+    methodology = _focused_methodology_appendix(
+        mmd_df=mmd_df,
+        benchmark_source_mode=benchmark_source_mode,
+        benchmark_priority=benchmark_priority,
+        benchmark_conflict_policy=benchmark_conflict_policy,
+    )
+    chart_explanations = _focused_core_chart_explanations(selected_issuer, selected_sector, benchmark_source_mode)
+    warning_cards = _build_snapshot_methodology_cards(issuer_base, mmd_df, benchmark_source_mode)
+    takeaway_bullets, takeaway_labels = _build_snapshot_takeaway(
+        issuer_df=issuer_base,
+        market_df=market_base,
+        cusip_summary=cusip_summary,
+        selected_issuer=selected_issuer,
+        benchmark_source_mode=benchmark_source_mode,
+    )
+
+    spread_series = pd.to_numeric(issuer_base.get("spread_bps"), errors="coerce") if "spread_bps" in issuer_base.columns else pd.Series(dtype="float64")
+    liq_series = pd.to_numeric(cusip_summary.get("liquidity_score"), errors="coerce") if "liquidity_score" in cusip_summary.columns else pd.Series(dtype="float64")
+    latest_trade = "No trades"
+    if not issuer_base.empty and "trade_date" in issuer_base.columns:
+        latest_date = pd.to_datetime(issuer_base["trade_date"], errors="coerce").dropna().max()
+        if pd.notna(latest_date):
+            latest_trade = latest_date.strftime("%m/%d/%Y")
+    top_candidate = cusip_summary.iloc[0] if not cusip_summary.empty else None
+    top_candidate_label = "N/A" if top_candidate is None else str(top_candidate.get("cusip", "N/A"))
+    top_candidate_note = ""
+    if top_candidate is not None:
+        top_candidate_note = (
+            f"{top_candidate.get('signal', 'Monitor')} | spread {_fmt_bps(top_candidate.get('current_spread_bps'))} | "
+            f"liquidity {_fmt_num(top_candidate.get('liquidity_score'))} | RV {_fmt_num(top_candidate.get('rv_score'))}"
+        )
+
+    metrics = pd.DataFrame(
+        [
+            {"Metric": "Issuer", "Value": selected_issuer},
+            {"Metric": "Sector", "Value": selected_sector or "Unknown"},
+            {"Metric": "Trade date range", "Value": _workflow_date_range_text(issuer_base)},
+            {"Metric": "Latest trade", "Value": latest_trade},
+            {"Metric": "Trade rows", "Value": f"{len(issuer_base):,}"},
+            {"Metric": "Security rows", "Value": f"{len(issuer_bonds):,}"},
+            {"Metric": "CUSIPs", "Value": f"{issuer_base['cusip'].nunique() if 'cusip' in issuer_base.columns else 0:,}"},
+            {"Metric": "Median spread", "Value": "N/A" if spread_series.dropna().empty else f"{spread_series.median():.1f} bps"},
+            {"Metric": "Median liquidity", "Value": "N/A" if liq_series.dropna().empty else f"{liq_series.median():.1f}"},
+            {"Metric": "Top candidate", "Value": top_candidate_label},
+            {"Metric": "Saved watchlist", "Value": f"{len(saved_watchlist):,}"},
+            {"Metric": "Benchmark source", "Value": benchmark_source_mode},
+        ]
+    )
+
+    warning_rows = pd.DataFrame(
+        [
+            {
+                "Area": card.get("kicker", ""),
+                "Status": _status_label(card.get("status", "neutral")),
+                "Value": card.get("value", ""),
+                "Detail": card.get("detail", ""),
+            }
+            for card in warning_cards
+        ]
+    )
+
+    return {
+        "title": report_title or f"{selected_issuer} Secondary Market Desk Report",
+        "prepared_for": prepared_for,
+        "analyst_note": analyst_note,
+        "generated": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+        "issuer": selected_issuer,
+        "sector": selected_sector,
+        "metrics": metrics,
+        "takeaway_bullets": takeaway_bullets,
+        "takeaway_labels": takeaway_labels,
+        "top_opportunities": top_opportunities,
+        "saved_watchlist": saved_watchlist,
+        "methodology": methodology,
+        "chart_explanations": chart_explanations,
+        "warning_rows": warning_rows,
+        "cusip_summary": cusip_summary,
+        "benchmark_source_mode": benchmark_source_mode,
+        "benchmark_priority": benchmark_priority,
+        "benchmark_conflict_policy": benchmark_conflict_policy,
+        "top_candidate_note": top_candidate_note,
+    }
+
+
+def _focused_report_markdown(context: dict, include_watchlist: bool = True, include_methodology: bool = True) -> str:
+    lines = [
+        f"# {context['title']}",
+        "",
+        f"Generated: {context['generated']}",
+        f"Prepared for: {context.get('prepared_for') or 'Internal desk review'}",
+        "",
+    ]
+    if context.get("analyst_note"):
+        lines.extend(["## Analyst Note", "", str(context["analyst_note"]), ""])
+
+    lines.extend(
+        [
+            "## Desk Snapshot",
+            "",
+            _focused_report_markdown_table(context["metrics"], max_rows=25),
+            "",
+            "## Analyst Takeaway",
+            "",
+        ]
+    )
+    lines.extend([f"- {bullet}" for bullet in context.get("takeaway_bullets", [])])
+    lines.extend(["", "## Top Opportunities", "", _focused_report_markdown_table(context["top_opportunities"], max_rows=10), ""])
+
+    if include_watchlist:
+        lines.extend(["## Saved Watchlist", "", _focused_report_markdown_table(context["saved_watchlist"], max_rows=30), ""])
+
+    lines.extend(["## Core Chart Guide", "", _focused_report_markdown_table(context["chart_explanations"], max_rows=10), ""])
+    lines.extend(["## Methodology Warnings", "", _focused_report_markdown_table(context["warning_rows"], max_rows=10), ""])
+
+    if include_methodology:
+        lines.extend(["## Methodology Appendix", "", _focused_report_markdown_table(context["methodology"], max_rows=30), ""])
+
+    lines.extend(
+        [
+            "## Important Limitation",
+            "",
+            "RV and liquidity scores are screening tools generated from the uploaded data. They are not investment recommendations.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _focused_report_html(context: dict, include_watchlist: bool = True, include_methodology: bool = True) -> str:
+    note_html = ""
+    if context.get("analyst_note"):
+        note_html = f"<section><h2>Analyst Note</h2><p>{_html_escape(context['analyst_note'])}</p></section>"
+    takeaway = "".join(f"<li>{_html_escape(bullet)}</li>" for bullet in context.get("takeaway_bullets", []))
+    watchlist_section = ""
+    if include_watchlist:
+        watchlist_section = f"""
+<section>
+  <h2>Saved Watchlist</h2>
+  {_focused_report_html_table(context["saved_watchlist"], max_rows=30)}
+</section>
+"""
+    methodology_section = ""
+    if include_methodology:
+        methodology_section = f"""
+<section>
+  <h2>Methodology Appendix</h2>
+  {_focused_report_html_table(context["methodology"], max_rows=30)}
+</section>
+"""
+    return f"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{_html_escape(context['title'])}</title>
+<style>
+  body {{ font-family: Arial, sans-serif; color: #111827; margin: 34px; line-height: 1.45; }}
+  h1 {{ font-size: 30px; margin-bottom: 4px; }}
+  h2 {{ font-size: 20px; margin-top: 28px; border-bottom: 1px solid #dbe3ef; padding-bottom: 8px; }}
+  .muted {{ color: #64748b; font-size: 13px; }}
+  .report-table {{ border-collapse: collapse; width: 100%; margin: 12px 0 8px; font-size: 13px; }}
+  .report-table th, .report-table td {{ border: 1px solid #dbe3ef; padding: 8px 10px; text-align: left; vertical-align: top; }}
+  .report-table th {{ background: #f5f7fb; color: #334155; }}
+  .callout {{ border: 1px solid #b7d4ce; background: #eef8f5; padding: 12px 14px; border-radius: 8px; }}
+  @media print {{ body {{ margin: 18mm; }} .report-table {{ font-size: 11px; }} }}
+</style>
+</head>
+<body>
+<h1>{_html_escape(context['title'])}</h1>
+<p class="muted">Generated {context['generated']} | Prepared for {_html_escape(context.get('prepared_for') or 'Internal desk review')}</p>
+{note_html}
+<section>
+  <h2>Desk Snapshot</h2>
+  {_focused_report_html_table(context["metrics"], max_rows=25)}
+</section>
+<section>
+  <h2>Analyst Takeaway</h2>
+  <div class="callout"><ul>{takeaway}</ul></div>
+</section>
+<section>
+  <h2>Top Opportunities</h2>
+  {_focused_report_html_table(context["top_opportunities"], max_rows=10)}
+</section>
+{watchlist_section}
+<section>
+  <h2>Core Chart Guide</h2>
+  {_focused_report_html_table(context["chart_explanations"], max_rows=10)}
+</section>
+<section>
+  <h2>Methodology Warnings</h2>
+  {_focused_report_html_table(context["warning_rows"], max_rows=10)}
+</section>
+{methodology_section}
+<section>
+  <h2>Important Limitation</h2>
+  <p>RV and liquidity scores are screening tools generated from the uploaded data. They are not investment recommendations.</p>
+</section>
+</body>
+</html>
+"""
+
+
+def _focused_report_bundle_bytes(context: dict, markdown: str, html_report: str) -> bytes:
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("report.md", markdown)
+        zf.writestr("report.html", html_report)
+        zf.writestr("desk_snapshot.csv", context["metrics"].to_csv(index=False))
+        zf.writestr("top_opportunities.csv", context["top_opportunities"].to_csv(index=False))
+        zf.writestr("saved_watchlist.csv", context["saved_watchlist"].to_csv(index=False))
+        zf.writestr("chart_guide.csv", context["chart_explanations"].to_csv(index=False))
+        zf.writestr("methodology_appendix.csv", context["methodology"].to_csv(index=False))
+        zf.writestr("methodology_warnings.csv", context["warning_rows"].to_csv(index=False))
+    return buffer.getvalue()
+
+
+def _focused_report_pdf_bytes(context: dict) -> tuple[bytes | None, str | None]:
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    except Exception as exc:
+        return None, str(exc)
+
+    def small_table(df: pd.DataFrame, max_rows: int = 10) -> Table:
+        if df is None or df.empty:
+            table = Table([["No rows available."]])
+            table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey), ("FONTSIZE", (0, 0), (-1, -1), 8)]))
+            return table
+        display = prepare_display_dataframe(df, max_rows=max_rows)
+        data = [list(display.columns)] + display.astype(str).values.tolist()
+        table = Table(data, repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ]
+            )
+        )
+        return table
+
+    try:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=28, leftMargin=28, topMargin=28, bottomMargin=28)
+        styles = getSampleStyleSheet()
+        story = [
+            Paragraph(_html_escape(context["title"]), styles["Title"]),
+            Paragraph(f"Generated {context['generated']}", styles["Normal"]),
+            Spacer(1, 10),
+            Paragraph("Desk Snapshot", styles["Heading2"]),
+            small_table(context["metrics"], max_rows=25),
+            Spacer(1, 12),
+            Paragraph("Analyst Takeaway", styles["Heading2"]),
+        ]
+        for bullet in context.get("takeaway_bullets", []):
+            story.append(Paragraph(f"- {_html_escape(bullet)}", styles["BodyText"]))
+        story.extend(
+            [
+                Spacer(1, 12),
+                Paragraph("Top Opportunities", styles["Heading2"]),
+                small_table(context["top_opportunities"], max_rows=6),
+                Spacer(1, 12),
+                Paragraph("Saved Watchlist", styles["Heading2"]),
+                small_table(context["saved_watchlist"], max_rows=8) if not context["saved_watchlist"].empty else Paragraph("No saved watchlist rows.", styles["BodyText"]),
+                Spacer(1, 12),
+                Paragraph("Methodology Appendix", styles["Heading2"]),
+                small_table(context["methodology"], max_rows=10),
+                Spacer(1, 10),
+                Paragraph("RV and liquidity scores are screening tools, not investment recommendations.", styles["Italic"]),
+            ]
+        )
+        doc.build(story)
+        return buffer.getvalue(), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _focused_report_pptx_bytes(context: dict) -> tuple[bytes | None, str | None]:
+    try:
+        from pptx import Presentation
+        from pptx.util import Pt
+    except Exception as exc:
+        return None, str(exc)
+
+    def add_bullets(slide, items: list[str], font_size: int = 16):
+        body = slide.placeholders[1].text_frame
+        body.clear()
+        for item in items:
+            p = body.add_paragraph()
+            p.text = str(item)
+            p.font.size = Pt(font_size)
+
+    try:
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[0])
+        slide.shapes.title.text = context["title"]
+        slide.placeholders[1].text = f"{context['issuer']} | {context['sector']} | {context['generated']}"
+
+        metrics = {row["Metric"]: row["Value"] for _, row in context["metrics"].iterrows()}
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = "Desk Snapshot"
+        add_bullets(
+            slide,
+            [
+                f"Date range: {metrics.get('Trade date range', 'N/A')}",
+                f"Trade rows: {metrics.get('Trade rows', 'N/A')} | CUSIPs: {metrics.get('CUSIPs', 'N/A')}",
+                f"Median spread: {metrics.get('Median spread', 'N/A')}",
+                f"Top candidate: {metrics.get('Top candidate', 'N/A')}",
+                f"Benchmark source: {metrics.get('Benchmark source', 'N/A')}",
+            ],
+        )
+
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = "Analyst Takeaway"
+        add_bullets(slide, context.get("takeaway_bullets", [])[:5])
+
+        top_rows = []
+        for _, row in context["top_opportunities"].head(5).iterrows():
+            top_rows.append(
+                f"{row.get('cusip', 'N/A')}: {row.get('signal', 'Monitor')}, spread {_fmt_bps(row.get('current_spread_bps'))}, liquidity {_fmt_num(row.get('liquidity_score'))}"
+            )
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = "Top Opportunities"
+        add_bullets(slide, top_rows or ["No top opportunities available."])
+
+        watch_rows = []
+        for _, row in context["saved_watchlist"].head(5).iterrows():
+            note = str(row.get("note", "") or "").strip()
+            watch_rows.append(f"{row.get('cusip', 'N/A')}: {row.get('signal', 'Monitor')}" + (f" - {note}" if note else ""))
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = "Saved Watchlist"
+        add_bullets(slide, watch_rows or ["No saved watchlist rows."])
+
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = "Methodology Notes"
+        add_bullets(
+            slide,
+            [
+                "Uploaded MMD is AAA benchmark when external MMD fallback is active.",
+                "Trade-sheet Index / Index Rate is not blended with external MMD.",
+                "Callable, liquidity, sector, and rating effects remain separate from benchmark spread.",
+                "RV and liquidity scores are screening tools, not investment recommendations.",
+            ],
+            font_size=15,
+        )
+
+        buffer = io.BytesIO()
+        prs.save(buffer)
+        return buffer.getvalue(), None
+    except Exception as exc:
+        return None, str(exc)
+
+
 def _render_benchmark_methodology_block(mmd_df: pd.DataFrame, benchmark_source_mode: str, benchmark_priority: str, benchmark_conflict_policy: str):
     st.markdown(
         """
@@ -3244,6 +3794,7 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
 def render_focused_export_methodology(
     selected_issuer: str,
     selected_sector: str,
+    market_df: pd.DataFrame,
     issuer_trades: pd.DataFrame,
     issuer_bonds: pd.DataFrame,
     mmd_df: pd.DataFrame,
@@ -3253,40 +3804,167 @@ def render_focused_export_methodology(
 ):
     section_anchor("workflow-export-methodology", "Export / Methodology")
     st.markdown(
-        "<div class='focus-band'>Reporting page: download a concise analyst summary and review the fixed methodology before sharing outputs.</div>",
+        "<div class='focus-band'>Final reporting center. Package the desk snapshot, saved watchlist, chart guide, and benchmark methodology into shareable files.</div>",
         unsafe_allow_html=True,
     )
-    latest_trade = issuer_trades["trade_date"].max().strftime("%m/%d/%Y") if not issuer_trades.empty and "trade_date" in issuer_trades.columns else "No trades"
-    summary_lines = [
-        "# Secondary Market Desk Snapshot",
-        "",
-        f"Generated: {pd.Timestamp.now():%Y-%m-%d %H:%M}",
-        f"Issuer: {selected_issuer}",
-        f"Sector: {selected_sector}",
-        f"Trade rows: {len(issuer_trades):,}",
-        f"Security rows: {len(issuer_bonds):,}",
-        f"Latest trade: {latest_trade}",
-        f"Benchmark source: {benchmark_source_mode}",
-        "",
-        "## Methodology",
-        "- Uploaded MMD is the AAA benchmark when external MMD is the active source.",
-        "- If trade-sheet Index / Index Rate exists, it is used first and not mixed with external MMD.",
-        "- Spread is calculated as issuer yield minus active benchmark yield.",
-        "- Rating, sector, callable, and liquidity effects are displayed separately in attribution rather than embedded into benchmark spread.",
-        "- RV and liquidity scores are screening tools, not investment recommendations.",
-    ]
-    summary_md = "\n".join(summary_lines)
-    st.download_button(
-        "Download Analyst Summary Markdown",
-        data=summary_md.encode("utf-8"),
-        file_name=f"{selected_issuer}_desk_summary.md".replace(" ", "_"),
-        mime="text/markdown",
+
+    default_title = f"{selected_issuer} Secondary Market Desk Report"
+    ctrl1, ctrl2 = st.columns([1.35, 1])
+    with ctrl1:
+        report_title = st.text_input("Report title", value=default_title, key="focused_report_title")
+    with ctrl2:
+        prepared_for = st.text_input("Prepared for", value="Internal desk review", key="focused_report_prepared_for")
+    analyst_note = st.text_area(
+        "Analyst note",
+        key="focused_report_analyst_note",
+        height=86,
+        placeholder="Optional framing note, follow-up question, or desk instruction to carry into the report.",
     )
-    with st.expander("Preview summary", expanded=True):
-        st.markdown(summary_md)
+    include_col1, include_col2, include_col3 = st.columns(3)
+    with include_col1:
+        include_watchlist = st.checkbox("Include saved watchlist", value=True, key="focused_report_include_watchlist")
+    with include_col2:
+        include_methodology = st.checkbox("Include methodology appendix", value=True, key="focused_report_include_methodology")
+    with include_col3:
+        include_optional_formats = st.checkbox("Show PDF / PPTX downloads", value=True, key="focused_report_include_optional_formats")
+
+    context = _build_focused_report_context(
+        report_title=report_title,
+        prepared_for=prepared_for,
+        analyst_note=analyst_note,
+        selected_issuer=selected_issuer,
+        selected_sector=selected_sector,
+        market_df=market_df,
+        issuer_trades=issuer_trades,
+        issuer_bonds=issuer_bonds,
+        mmd_df=mmd_df,
+        benchmark_source_mode=benchmark_source_mode,
+        benchmark_priority=benchmark_priority,
+        benchmark_conflict_policy=benchmark_conflict_policy,
+    )
+    report_md = _focused_report_markdown(context, include_watchlist=include_watchlist, include_methodology=include_methodology)
+    report_html = _focused_report_html(context, include_watchlist=include_watchlist, include_methodology=include_methodology)
+    bundle_bytes = _focused_report_bundle_bytes(context, report_md, report_html)
+
+    st.subheader("Report Snapshot")
+    metric_lookup = {row["Metric"]: row["Value"] for _, row in context["metrics"].iterrows()}
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    with m1:
+        clean_metric_card("Issuer", metric_lookup.get("Issuer"), size="small", note=metric_lookup.get("Sector"))
+    with m2:
+        clean_metric_card("Date Range", metric_lookup.get("Trade date range"), size="small")
+    with m3:
+        clean_metric_card("Trade Rows", metric_lookup.get("Trade rows"), size="small")
+    with m4:
+        clean_metric_card("Median Spread", metric_lookup.get("Median spread"), size="small")
+    with m5:
+        clean_metric_card("Saved", metric_lookup.get("Saved watchlist"), size="small")
+    with m6:
+        clean_metric_card("Benchmark", metric_lookup.get("Benchmark source"), size="small")
+
+    st.subheader("Analyst Takeaway Preview")
+    for bullet in context["takeaway_bullets"]:
+        st.markdown(f"- {bullet}")
+    if context.get("top_candidate_note"):
+        st.caption(f"Top candidate read-through: {context['top_candidate_note']}")
+
+    st.subheader("Top Opportunities Included")
+    top_cols = [
+        "cusip", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
+        "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
+    ]
+    if context["top_opportunities"].empty:
+        st.info("No CUSIP opportunity rows are available for this report.")
+    else:
+        safe_dataframe(
+            context["top_opportunities"][[c for c in top_cols if c in context["top_opportunities"].columns]],
+            hide_index=True,
+            auto_collapse=False,
+        )
+
+    st.subheader("Saved Watchlist Included")
+    watch_cols = [
+        "cusip", "issuer", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
+        "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
+        "note", "source", "updated_at",
+    ]
+    if context["saved_watchlist"].empty:
+        st.info("No saved watchlist candidates yet. Save CUSIPs from CUSIP Drilldown or RV / Watchlist before final export.")
+    else:
+        safe_dataframe(
+            context["saved_watchlist"][[c for c in watch_cols if c in context["saved_watchlist"].columns]],
+            hide_index=True,
+            auto_collapse=False,
+        )
+
+    st.subheader("Core Chart Guide Included")
+    safe_dataframe(context["chart_explanations"], hide_index=True, auto_collapse=False)
+
+    st.subheader("Downloads")
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        st.download_button(
+            "Download Report Markdown",
+            data=report_md.encode("utf-8"),
+            file_name=_focused_report_filename(selected_issuer, "desk_report.md"),
+            mime="text/markdown",
+        )
+    with d2:
+        st.download_button(
+            "Download Print HTML",
+            data=report_html.encode("utf-8"),
+            file_name=_focused_report_filename(selected_issuer, "desk_report.html"),
+            mime="text/html",
+            help="Open in a browser and use Print to save a visual PDF if needed.",
+        )
+    with d3:
+        st.download_button(
+            "Download Report Bundle",
+            data=bundle_bytes,
+            file_name=_focused_report_filename(selected_issuer, "report_bundle.zip"),
+            mime="application/zip",
+        )
+    with d4:
+        st.download_button(
+            "Download Watchlist CSV",
+            data=context["saved_watchlist"].to_csv(index=False).encode("utf-8"),
+            file_name=_focused_report_filename(selected_issuer, "saved_watchlist.csv"),
+            mime="text/csv",
+            disabled=context["saved_watchlist"].empty,
+        )
+
+    if include_optional_formats:
+        opt1, opt2 = st.columns(2)
+        with opt1:
+            pdf_bytes, pdf_error = _focused_report_pdf_bytes(context)
+            if pdf_bytes:
+                st.download_button(
+                    "Download PDF Summary",
+                    data=pdf_bytes,
+                    file_name=_focused_report_filename(selected_issuer, "desk_summary.pdf"),
+                    mime="application/pdf",
+                )
+            else:
+                st.info(f"PDF export requires `reportlab`. Current error: {pdf_error}")
+        with opt2:
+            pptx_bytes, pptx_error = _focused_report_pptx_bytes(context)
+            if pptx_bytes:
+                st.download_button(
+                    "Download PPTX Outline",
+                    data=pptx_bytes,
+                    file_name=_focused_report_filename(selected_issuer, "desk_report_outline.pptx"),
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                )
+            else:
+                st.info(f"PPTX export requires `python-pptx`. Current error: {pptx_error}")
+
+    with st.expander("Preview Markdown Report", expanded=False):
+        st.markdown(report_md)
 
     st.subheader("Methodology / Benchmark Audit")
     _render_benchmark_methodology_block(mmd_df, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
+    st.subheader("Methodology Appendix for Report")
+    safe_dataframe(context["methodology"], hide_index=True, auto_collapse=False)
 
 
 def render_focused_workflow(
@@ -3330,7 +4008,7 @@ def render_focused_workflow(
         render_focused_rv_watchlist(issuer_trades, selected_issuer)
     elif workflow_view == "6. Export / Methodology":
         render_focused_export_methodology(
-            selected_issuer, selected_sector, issuer_trades, issuer_bonds, mmd_df,
+            selected_issuer, selected_sector, market_df, issuer_trades, issuer_bonds, mmd_df,
             benchmark_source_mode, benchmark_priority, benchmark_conflict_policy,
         )
 
