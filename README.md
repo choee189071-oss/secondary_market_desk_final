@@ -87,6 +87,8 @@ The current review path is:
 
 More detail is in `docs/analyst_review_playbook.md`.
 
+For external or professional review sessions, use `docs/reviewer_handoff_pack.md`. The same one-page handoff can also be downloaded from Export / Methodology inside the app.
+
 ## Golden Regression Check
 
 Run the LADWP golden-sample check after methodology or UI changes:

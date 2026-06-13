@@ -11,6 +11,7 @@ from reports.export_center import (
     focused_report_pdf_bytes,
     focused_report_pptx_bytes,
 )
+from reports.reviewer_handoff import reviewer_handoff_markdown
 from ui.analyst_review import render_analyst_review_mode
 
 
@@ -78,6 +79,7 @@ def render_focused_export_methodology(
     report_md = focused_report_markdown(context, include_watchlist=include_watchlist, include_methodology=include_methodology)
     report_html = focused_report_html(context, include_watchlist=include_watchlist, include_methodology=include_methodology)
     bundle_bytes = focused_report_bundle_bytes(context, report_md, report_html)
+    handoff_md = reviewer_handoff_markdown(selected_issuer)
 
     st.subheader("Report Snapshot")
     metric_lookup = {row["Metric"]: row["Value"] for _, row in context["metrics"].iterrows()}
@@ -102,6 +104,15 @@ def render_focused_export_methodology(
         st.caption(f"Top candidate read-through: {context['top_candidate_note']}")
 
     render_analyst_review_mode(context, selected_issuer, safe_dataframe)
+
+    with st.expander("Reviewer Handoff", expanded=False):
+        st.markdown(handoff_md)
+        st.download_button(
+            "Download Reviewer Handoff",
+            data=handoff_md.encode("utf-8"),
+            file_name=focused_report_filename(selected_issuer, "reviewer_handoff.md"),
+            mime="text/markdown",
+        )
 
     top_cols = [
         "cusip", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",

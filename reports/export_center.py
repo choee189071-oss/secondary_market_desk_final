@@ -8,6 +8,7 @@ import zipfile
 import pandas as pd
 
 from engine.methodology import methodology_trust_layers
+from reports.reviewer_handoff import reviewer_handoff_markdown
 
 
 def _make_unique_columns(columns) -> list[str]:
@@ -371,6 +372,7 @@ def focused_report_bundle_bytes(context: dict, markdown: str, html_report: str) 
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("report.md", markdown)
         zf.writestr("report.html", html_report)
+        zf.writestr("reviewer_handoff.md", reviewer_handoff_markdown(str(context.get("issuer", "Selected issuer"))))
         zf.writestr("desk_snapshot.csv", context["metrics"].to_csv(index=False))
         zf.writestr("top_opportunities.csv", context["top_opportunities"].to_csv(index=False))
         zf.writestr("saved_watchlist.csv", context["saved_watchlist"].to_csv(index=False))

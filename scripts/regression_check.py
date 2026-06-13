@@ -76,6 +76,7 @@ COMPILE_TARGETS = [
     "engine/load_data.py",
     "reports/__init__.py",
     "reports/export_center.py",
+    "reports/reviewer_handoff.py",
     "ui/__init__.py",
     "ui/common.py",
     "ui/charts.py",
