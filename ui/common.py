@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import pandas as pd
 import streamlit as st
 
@@ -194,3 +195,62 @@ def _first_existing_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
         if c in df.columns:
             return c
     return None
+
+
+def _html_escape(value: object) -> str:
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def _status_label(status: str) -> str:
+    return {
+        "good": "Green",
+        "warn": "Yellow",
+        "bad": "Red",
+        "neutral": "Info",
+    }.get(status, "Info")
+
+
+def _render_card_grid(cards: list[dict], grid_class: str):
+    parts = [f"<div class='{grid_class}'>"]
+    for card in cards:
+        status = card.get("status", "neutral")
+        parts.append(
+            f"""
+<div class="{card.get('class_name', 'status-card')} status-{_html_escape(status)}">
+  <div class="status-pill">{_html_escape(_status_label(status))}</div>
+  <div class="card-kicker">{_html_escape(card.get('kicker', ''))}</div>
+  <div class="card-title">{_html_escape(card.get('title', ''))}</div>
+  <div class="card-value">{_html_escape(card.get('value', ''))}</div>
+  <div class="card-detail">{_html_escape(card.get('detail', ''))}</div>
+</div>
+"""
+        )
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+def _nonnull_rate(df: pd.DataFrame, col: str) -> float | None:
+    if df.empty or col not in df.columns or len(df) == 0:
+        return None
+    series = df[col]
+    if series.dtype == object:
+        valid = series.notna() & (series.astype(str).str.strip() != "")
+    else:
+        valid = series.notna()
+    return float(valid.mean() * 100)
+
+
+def _numeric_rate(df: pd.DataFrame, col: str) -> float | None:
+    if df.empty or col not in df.columns or len(df) == 0:
+        return None
+    return float(pd.to_numeric(df[col], errors="coerce").notna().mean() * 100)
+
+
+def _rate_status(rate: float | None, good_threshold: float = 95, warn_threshold: float = 80) -> str:
+    if rate is None:
+        return "bad"
+    if rate >= good_threshold:
+        return "good"
+    if rate >= warn_threshold:
+        return "warn"
+    return "bad"
