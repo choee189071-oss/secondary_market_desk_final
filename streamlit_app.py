@@ -727,6 +727,69 @@ div[data-testid="stMetric"] {
     line-height: 1.55;
 }
 
+.sidebar-brand {
+    border: 1px solid #dbe3ee;
+    border-radius: 14px;
+    padding: 13px 14px;
+    background: #f8fafc;
+    margin-bottom: 12px;
+}
+
+.sidebar-brand-title {
+    color: #111827;
+    font-size: 1rem;
+    font-weight: 820;
+    line-height: 1.15;
+}
+
+.sidebar-brand-subtitle {
+    color: #64748b;
+    font-size: 0.78rem;
+    line-height: 1.3;
+    margin-top: 4px;
+}
+
+.sidebar-section-label {
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 820;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin: 18px 0 7px 0;
+}
+
+.sidebar-status-card {
+    border: 1px solid #dbe3ee;
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: #ffffff;
+    margin: 8px 0;
+}
+
+.sidebar-status-kicker {
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 780;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+}
+
+.sidebar-status-value {
+    color: #111827;
+    font-size: 0.95rem;
+    font-weight: 760;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.sidebar-status-note {
+    color: #64748b;
+    font-size: 0.78rem;
+    line-height: 1.3;
+    margin-top: 4px;
+}
+
 /* Keep dataframes/charts visually lighter */
 div[data-testid="stDataFrame"] {
     border-radius: 14px;
@@ -1442,6 +1505,28 @@ def clean_metric_card(label: str, value: object, size: str = "large", note: str 
     )
 
 
+def sidebar_section_label(label: str):
+    st.markdown(f"<div class='sidebar-section-label'>{html.escape(label)}</div>", unsafe_allow_html=True)
+
+
+def sidebar_status_card(kicker: str, value: object, note: str | None = None):
+    safe_kicker = html.escape(str(kicker or "Status"), quote=True)
+    safe_value = html.escape("—" if value is None else str(value), quote=True)
+    note_html = ""
+    if note:
+        note_html = f"<div class='sidebar-status-note'>{html.escape(str(note), quote=True)}</div>"
+    st.markdown(
+        f"""
+<div class="sidebar-status-card">
+  <div class="sidebar-status-kicker">{safe_kicker}</div>
+  <div class="sidebar-status-value">{safe_value}</div>
+  {note_html}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 # Focused upload helpers live in ui/upload.py; shared card helpers live in ui/common.py.
 
 
@@ -1904,49 +1989,58 @@ def dataframe_download_button(df: pd.DataFrame, label: str, filename: str):
 
 
 with st.sidebar:
-    st.header("Workflow")
+    st.markdown(
+        """
+<div class="sidebar-brand">
+  <div class="sidebar-brand-title">Secondary Market Desk</div>
+  <div class="sidebar-brand-subtitle">Upload, analyze, review, export.</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    sidebar_section_label("Workflow")
     workflow_view = st.radio(
-        "Workspace section",
+        "Workspace",
         WORKFLOW_LABELS,
         index=0,
         help="Use the focused workflow from upload through review and final export. Advanced Audit keeps the full long-form workstation available for reviewer checks.",
+        label_visibility="collapsed",
     )
-    st.caption("Daily workflow: upload, analyze, drill down, review in Advanced Audit, then export.")
-    st.markdown("---")
-    st.header("Performance")
-    PERFORMANCE_MODE = st.checkbox(
-        "Fast mode",
-        value=True,
-        help="Caches heavy calculations, limits displayed rows, and keeps ladders readable.",
-    )
-    MAX_TABLE_ROWS = st.number_input(
-        "Max table rows shown",
-        min_value=500,
-        max_value=20000,
-        value=3000,
-        step=500,
-        help="Only limits displayed tables; underlying analytics still use the full filtered dataset.",
-    )
-    MAX_HEATMAP_ROWS = st.slider(
-        "Max ladder maturity rows",
-        min_value=8,
-        max_value=40,
-        value=18,
-        help="Fast mode keeps the maturity years with the largest absolute signal.",
-    )
-    SHOW_FULL_RAW_TABLES = st.checkbox(
-        "Show full raw tables",
-        value=False,
-        help="Usually keep this off. Full raw tables are one of the biggest Streamlit slowdowns.",
-    )
-    ENABLE_REPORT_EXPORTS = st.checkbox(
-        "Enable report export builder",
-        value=False,
-        help="Keep off while exploring. Report export recomputes multiple charts and can slow the app.",
-    )
-    if st.button("Clear cached calculations"):
-        st.cache_data.clear()
-        st.rerun()
+    sidebar_status_card("Next", "Upload file" if workflow_view == "1. Upload / Data Audit" else workflow_view.split(". ", 1)[-1])
+    with st.expander("System", expanded=False):
+        PERFORMANCE_MODE = st.checkbox(
+            "Fast mode",
+            value=True,
+            help="Caches heavy calculations, limits displayed rows, and keeps ladders readable.",
+        )
+        MAX_TABLE_ROWS = st.number_input(
+            "Max table rows shown",
+            min_value=500,
+            max_value=20000,
+            value=3000,
+            step=500,
+            help="Only limits displayed tables; underlying analytics still use the full filtered dataset.",
+        )
+        MAX_HEATMAP_ROWS = st.slider(
+            "Max ladder maturity rows",
+            min_value=8,
+            max_value=40,
+            value=18,
+            help="Fast mode keeps the maturity years with the largest absolute signal.",
+        )
+        SHOW_FULL_RAW_TABLES = st.checkbox(
+            "Show full raw tables",
+            value=False,
+            help="Usually keep this off. Full raw tables are one of the biggest Streamlit slowdowns.",
+        )
+        ENABLE_REPORT_EXPORTS = st.checkbox(
+            "Enable report export builder",
+            value=False,
+            help="Keep off while exploring. Report export recomputes multiple charts and can slow the app.",
+        )
+        if st.button("Clear cached calculations"):
+            st.cache_data.clear()
+            st.rerun()
 
 with st.expander(
     "Upload Center",
@@ -2177,124 +2271,36 @@ Trade-sheet index rates and an external MMD sheet may differ by date, tenor, rou
         )
 
 with st.sidebar:
-    st.markdown("---")
-    st.header("2. Select From Uploaded Issuers")
+    sidebar_section_label("Context")
+    sidebar_status_card(
+        "Loaded",
+        f"{len(uploaded_issuers):,} issuer(s)",
+        f"{len(market_df):,} trades across {len(trade_files):,} file(s)",
+    )
     selected_issuer = st.selectbox(
-        "Primary Issuer",
+        "Issuer",
         uploaded_issuers,
-        help="Main issuer shown first in desk snapshot and drilldown sections. Rename each trade file with the issuer name for best results."
+        help="Main issuer shown first in snapshot, charts, drilldown, and exports.",
     )
 
-    # -----------------------------------------------------------------------------
-    # Desk comparison controls
-    # -----------------------------------------------------------------------------
     peer_options_sidebar = [x for x in uploaded_issuers if x != selected_issuer]
     default_peers_sidebar = peer_options_sidebar[:2] if peer_options_sidebar else []
     comparison_issuers_sidebar = st.multiselect(
-        "Compare With Issuers",
+        "Peers",
         peer_options_sidebar,
         default=default_peers_sidebar,
-        help="Optional peer issuers to plot beside the primary issuer in spread and volume charts.",
+        help="Optional issuers to plot beside the selected issuer.",
     )
 
-    snapshot_reference_lines = st.multiselect(
-        "Reference Lines",
-        ["AAA / MMD Baseline", "Sector Average", "All Uploaded Issuers Average"],
-        default=["Sector Average"] if peer_options_sidebar else [],
-        help="Adds desk-style reference lines to the spread chart. AAA / MMD baseline is 0 bps when spread is measured vs AAA/MMD.",
-    )
-
-    volume_comparison_mode = st.radio(
-        "Volume Chart Grouping",
-        ["Primary vs Peers vs All Other", "Selected Issuers Only"],
-        index=0,
-        help="Controls whether the volume chart stacks selected issuers against the rest of the uploaded market universe.",
-    )
-
-    # -----------------------------------------------------------------------------
-    # Manual issuer sector override
-    # -----------------------------------------------------------------------------
-    sector_options = [
-        "Unknown", "General Government", "State GO", "Local Government",
-        "Utilities", "Water / Sewer", "Power", "Transportation", "Airport",
-        "Education", "School District", "Healthcare", "Housing",
-        "Public Finance Authority", "Other",
-    ]
-
-    current_sector_sidebar = "Unknown"
-    if "sector" in market_df.columns:
-        vals = market_df.loc[market_df["issuer"] == selected_issuer, "sector"].dropna().astype(str).unique().tolist()
-        vals = [v for v in vals if v and v.lower() != "nan"]
-        if vals:
-            current_sector_sidebar = vals[0]
-
-    with st.expander("Issuer Sector Override", expanded=(current_sector_sidebar == "Unknown")):
-        st.caption("Use this when the trade file has no sector field, or when the inferred sector is Unknown / wrong.")
-        default_idx = sector_options.index(current_sector_sidebar) if current_sector_sidebar in sector_options else 0
-        selected_sector_input = st.selectbox("Sector", sector_options, index=default_idx, key=f"sector_select_{selected_issuer}")
-        custom_sector_input = st.text_input(
-            "Custom sector",
-            value="" if selected_sector_input != "Other" else current_sector_sidebar,
-            key=f"sector_custom_{selected_issuer}",
-        )
-        final_sector_input = custom_sector_input.strip() if selected_sector_input == "Other" and custom_sector_input.strip() else selected_sector_input
-        if st.button("Apply Sector to Current Issuer", key=f"apply_sector_{selected_issuer}"):
-            st.session_state.setdefault("issuer_sector_overrides", {})[selected_issuer] = final_sector_input
-            st.success(f"Applied: {selected_issuer} → {final_sector_input}")
-
-    # -----------------------------------------------------------------------------
-    # Maturity Year Selector
-    # -----------------------------------------------------------------------------
-    with st.expander("Maturity Year Methodology", expanded=False):
-        st.markdown(
-            """
-### Maturity Year Definition
-
-The dashboard now groups securities by **integer years to maturity** instead of broad ranges.
-
-**Formula:**
-
-`years_to_maturity = (maturity_date - trade_date) / 365.25`
-
-**Bucket rule:**
-
-- We use `ceil(years_to_maturity)` for the displayed maturity year.
-- Example: 4.3 years to maturity → **5Y**.
-- This is closer to curve-tenor convention than broad buckets like 1Y / 30Y.
-
-This makes issuer-level analysis easier because you can compare 1Y, 2Y, 3Y, ... securities directly.
-            """
-        )
-
-    issuer_year_values = []
-    if "maturity_year" in market_df.columns:
-        issuer_year_values = (
-            market_df.loc[market_df["issuer"] == selected_issuer, "maturity_year"]
-            .dropna()
-            .astype(int)
-            .sort_values()
-            .unique()
-            .tolist()
-        )
-    maturity_year_options = ["All"] + [f"{int(y)}Y" for y in issuer_year_values if int(y) >= 1]
-    selected_maturity_year = st.selectbox(
-        "Maturity Year",
-        maturity_year_options,
-        help="Filter securities by integer years to maturity. Example: 4.3 years to maturity is grouped as 5Y.",
-    )
-
-    # -----------------------------------------------------------------------------
-    # Snapshot / Chart Period Selector
-    # -----------------------------------------------------------------------------
+    sidebar_section_label("Filters")
     selected_trade_date_range = None
     trade_date_filter_enabled = False
     snapshot_period = st.selectbox(
-        "Snapshot / Chart Period",
+        "Period",
         ["All", "Last 3M", "Last 6M", "Last 1Y", "YTD", "Custom"],
         index=3,
-        help="Choose Custom to freely select exact start/end trade dates. This is a data filter, unlike Plotly zoom which only changes the visual view.",
+        help="This filters the dataset. Plotly zoom only changes the view.",
     )
-    st.caption("Tip: use Custom here for a true date filter; chart zoom only changes the view and does not filter the dataset.")
     if "trade_date" in market_df.columns:
         _trade_dates = pd.to_datetime(market_df["trade_date"], errors="coerce").dropna()
         if not _trade_dates.empty:
@@ -2305,15 +2311,17 @@ This makes issuer-level analysis easier because you can compare 1Y, 2Y, 3Y, ... 
             if snapshot_period == "All":
                 trade_date_filter_enabled = False
                 selected_trade_date_range = None
+                period_note = f"{_min_ts:%m/%d/%Y} to {_max_ts:%m/%d/%Y}"
             elif snapshot_period == "Custom":
                 trade_date_filter_enabled = True
                 selected_trade_date_range = st.date_input(
-                    "Custom Trade Date Range",
+                    "Custom range",
                     value=(_min_date, _max_date),
                     min_value=_min_date,
                     max_value=_max_date,
-                    help="Choose the exact trade-date period to show in the spread and volume snapshot charts.",
+                    help="Choose the exact trade-date period to show in charts and tables.",
                 )
+                period_note = "Custom date range"
             else:
                 trade_date_filter_enabled = True
                 if snapshot_period == "Last 3M":
@@ -2327,149 +2335,144 @@ This makes issuer-level analysis easier because you can compare 1Y, 2Y, 3Y, ... 
                 else:
                     _start_ts = _min_ts
                 selected_trade_date_range = (_start_ts.date(), _max_date)
-                st.caption(f"Active period: {_start_ts:%m/%d/%Y} → {_max_ts:%m/%d/%Y}")
+                period_note = f"{_start_ts:%m/%d/%Y} to {_max_ts:%m/%d/%Y}"
+            st.caption(period_note)
+        else:
+            st.caption("No valid trade dates detected.")
     else:
-        st.caption("Snapshot period unavailable until trade dates are loaded.")
-    # Keep legacy variables available for older downstream chart blocks.
+        st.caption("Trade-date filter unavailable.")
+
+    issuer_year_values = []
+    if "maturity_year" in market_df.columns:
+        issuer_year_values = (
+            market_df.loc[market_df["issuer"] == selected_issuer, "maturity_year"]
+            .dropna()
+            .astype(int)
+            .sort_values()
+            .unique()
+            .tolist()
+        )
+    maturity_year_options = ["All"] + [f"{int(y)}Y" for y in issuer_year_values if int(y) >= 1]
+    selected_maturity_year = st.selectbox(
+        "Maturity",
+        maturity_year_options,
+        help="Integer years to maturity. Example: 4.3 years is grouped as 5Y.",
+    )
     maturity_bucket = selected_maturity_year
     trade_date_range = selected_trade_date_range
 
-    # -----------------------------------------------------------------------------
-    # Raw Table Toggle
-    # -----------------------------------------------------------------------------
-    show_raw_tables = st.checkbox(
-        "Show Raw Tables",
-        value=False,
-        help="""
-Display underlying trade-level and security-reference data tables.
+    with st.expander("Chart controls", expanded=False):
+        snapshot_reference_lines = st.multiselect(
+            "Reference lines",
+            ["AAA / MMD Baseline", "Sector Average", "All Uploaded Issuers Average"],
+            default=["Sector Average"] if peer_options_sidebar else [],
+            help="Adds reference lines to the spread chart.",
+        )
+        volume_comparison_mode = st.radio(
+            "Volume grouping",
+            ["Primary vs Peers vs All Other", "Selected Issuers Only"],
+            index=0,
+            help="Controls whether volume stacks selected issuers against the rest of the uploaded market universe.",
+        )
 
-Useful for:
-- Audit review
-- Data validation
-- Trade-level investigation
-- CUSIP drilldowns
-"""
-    )
+    sidebar_section_label("Benchmark")
+    sidebar_status_card("Active source", benchmark_source_mode, benchmark_conflict_policy)
 
-    st.markdown("---")
-    st.subheader("Index / Benchmark Source")
-    st.caption(f"Active: {benchmark_source_mode}")
-    st.caption(f"Policy: {benchmark_conflict_policy}")
+    sector_options = [
+        "Unknown", "General Government", "State GO", "Local Government",
+        "Utilities", "Water / Sewer", "Power", "Transportation", "Airport",
+        "Education", "School District", "Healthcare", "Housing",
+        "Public Finance Authority", "Other",
+    ]
+    current_sector_sidebar = st.session_state.get("issuer_sector_overrides", {}).get(selected_issuer, "Unknown")
+    if current_sector_sidebar == "Unknown" and "sector" in market_df.columns:
+        vals = market_df.loc[market_df["issuer"] == selected_issuer, "sector"].dropna().astype(str).unique().tolist()
+        vals = [v for v in vals if v and v.lower() != "nan"]
+        if vals:
+            current_sector_sidebar = vals[0]
 
-    st.markdown("---")
-    st.subheader("Desk Navigation")
-    st.caption("Desk-first order: the most-used secondary-market views are listed first.")
-    st.markdown(
-        """
+    with st.expander("Issuer settings", expanded=(current_sector_sidebar == "Unknown")):
+        default_idx = sector_options.index(current_sector_sidebar) if current_sector_sidebar in sector_options else 0
+        selected_sector_input = st.selectbox("Sector", sector_options, index=default_idx, key=f"sector_select_{selected_issuer}")
+        custom_sector_input = st.text_input(
+            "Custom sector",
+            value="" if selected_sector_input != "Other" else current_sector_sidebar,
+            key=f"sector_custom_{selected_issuer}",
+        )
+        final_sector_input = custom_sector_input.strip() if selected_sector_input == "Other" and custom_sector_input.strip() else selected_sector_input
+        if st.button("Apply sector", key=f"apply_sector_{selected_issuer}"):
+            st.session_state.setdefault("issuer_sector_overrides", {})[selected_issuer] = final_sector_input
+            st.success(f"Applied: {selected_issuer} -> {final_sector_input}")
+
+    with st.expander("Audit display", expanded=False):
+        show_raw_tables = st.checkbox(
+            "Show raw tables",
+            value=False,
+            help="Display underlying trade-level and security-reference data tables.",
+        )
+        st.markdown(
+            """
 <div class="sidebar-nav-small">
-<b>Primary Desk Views</b><br>
-<a href="#yield-relative-value">1. Secondary Market Spreads</a><br>
-<a href="#trading-volume">2. Secondary Market Trading Volume</a><br>
-<a href="#issuer-curve">3. Issuer Curve vs Benchmark</a><br>
-<a href="#spread-movement">4. Spread Movement Ladder</a><br>
-<a href="#liquidity">5. Liquidity / Trading Frequency</a><br>
-<a href="#cusip-drilldown">6. CUSIP Drilldown</a><br>
-<a href="#security-screener">7. Security Screener</a><br><br>
-
-<b>Relative Value Research</b><br>
-<a href="#peer-rv">8. Peer RV Comparison</a><br>
-<a href="#cross-issuer-rv">9. Cross-Issuer RV Analytics</a><br>
-<a href="#spread-level">10. Current Spread Curve</a><br>
-<a href="#spread-attribution">11. Spread Attribution</a><br>
-<a href="#historical-spread">12. Historical Spread Percentile</a><br>
-<a href="#curve-shape">13. Curve Shape Analytics</a><br><br>
-
-<b>Advanced / Commentary</b><br>
-<a href="#market-narrative">14. Market Narrative & Opportunity Map</a><br>
-<a href="#dealer-proxy">15. Dealer Behavior Proxy</a><br>
-<a href="#rv-positioning">16. RV Positioning Map</a><br>
-<a href="#scenario-shock">17. Scenario Shock Analysis</a><br>
-<a href="#watchlist">18. Watchlist / Saved Candidates</a><br>
-<a href="#recommendation-engine">19. Recommendation Narrative</a><br>
-<a href="#ai-commentary-studio">20. AI Commentary Studio</a><br><br>
-
-<b>Data / Admin</b><br>
-<a href="#file-readiness">File Readiness</a><br>
-<a href="#executive-snapshot">Executive Snapshot</a><br>
-<a href="#bond-master">Security Reference</a><br>
-<a href="#trade-detail">Trade Detail</a><br>
+<b>Advanced Audit jump list</b><br>
+<a href="#desk-market-snapshot">Desk Market Snapshot</a><br>
+<a href="#yield-relative-value">Secondary Market Spreads</a><br>
+<a href="#issuer-curve">Issuer Curve vs Benchmark</a><br>
+<a href="#spread-movement">Spread Movement Ladder</a><br>
+<a href="#liquidity">Liquidity / Trading Frequency</a><br>
+<a href="#cusip-drilldown">CUSIP Drilldown</a><br>
+<a href="#security-screener">Security Screener</a><br>
+<a href="#peer-rv">Peer RV Comparison</a><br>
+<a href="#cross-issuer-rv">Cross-Issuer RV Analytics</a><br>
 <a href="#downloads">Downloads</a>
 </div>
 """,
-        unsafe_allow_html=True,
-    )
+            unsafe_allow_html=True,
+        )
 
-    with st.expander("Version / Change Log", expanded=False):
+    with st.expander("Data health", expanded=False):
+        if not market_df.empty and "trade_date" in market_df.columns:
+            trade_dates = pd.to_datetime(market_df["trade_date"], errors="coerce").dropna()
+            if not trade_dates.empty:
+                earliest_trade = trade_dates.min()
+                latest_trade = trade_dates.max()
+                sidebar_status_card("Coverage", f"{earliest_trade:%m/%d/%Y} to {latest_trade:%m/%d/%Y}")
+            else:
+                sidebar_status_card("Coverage", "No valid trade dates")
+        else:
+            sidebar_status_card("Coverage", "No trade data loaded")
+
+        total_rows = len(market_df)
+        if total_rows > 0 and "cusip" in market_df.columns:
+            valid_cusip_count = market_df["cusip"].notna().sum()
+            valid_cusip_rate = valid_cusip_count / total_rows * 100
+        else:
+            valid_cusip_rate = 0
+        missing_issuers = market_df["issuer"].isna().sum() if "issuer" in market_df.columns else total_rows
+        sidebar_status_card("CUSIP quality", f"{valid_cusip_rate:.1f}% valid")
+        sidebar_status_card("Missing issuers", f"{missing_issuers:,}")
+        sidebar_status_card("Duplicates removed", f"{duplicates_removed:,}")
+
+        with st.expander("Methodology", expanded=False):
+            st.markdown(
+                """
+- Coverage uses the earliest and latest valid trade dates after standardization.
+- Trades loaded counts rows available for analytics.
+- CUSIP quality is the share of rows with a usable CUSIP.
+- Missing issuers counts rows without issuer after inference and mapping.
+- Duplicates removed counts exact duplicate standardized trade rows.
+                """
+            )
+
+    with st.expander("Version", expanded=False):
         st.markdown(
             """
-**Current Version:** `v1.2-desk-order`
+**Current Version:** `v1.3-sidebar-redesign`
 
 Recent additions:
-- Cross-Issuer RV Analytics
-- Scenario Shock Analysis
-- Recommendation Narrative Engine
-- Desk-first navigation and market snapshot
-- Reordered primary desk views and sidebar index
-- Faster exploration defaults
-- Optional advanced/admin sections
-            """
-        )
-    st.markdown("---")
-    st.header("Data Health")
-
-    if not market_df.empty and "trade_date" in market_df.columns:
-        trade_dates = pd.to_datetime(market_df["trade_date"], errors="coerce").dropna()
-        if not trade_dates.empty:
-            earliest_trade = trade_dates.min()
-            latest_trade = trade_dates.max()
-            st.caption(
-                f"📅 Data Coverage:\n"
-                f"{earliest_trade:%m/%d/%Y} → {latest_trade:%m/%d/%Y}"
-            )
-        else:
-            st.caption("📅 Data Coverage:\nNo valid trade dates detected")
-    else:
-        st.caption("📅 Data Coverage:\nNo trade data loaded")
-
-    st.caption(
-        f"📊 Trades Loaded:\n"
-        f"{len(market_df):,}"
-    )
-
-    total_rows = len(market_df)
-    if total_rows > 0 and "cusip" in market_df.columns:
-        valid_cusip_count = market_df["cusip"].notna().sum()
-        valid_cusip_rate = valid_cusip_count / total_rows * 100
-    else:
-        valid_cusip_rate = 0
-
-    cusip_icon = "🟢" if valid_cusip_rate >= 95 else "🟡" if valid_cusip_rate >= 80 else "🔴"
-    st.caption(
-        f"{cusip_icon} Valid CUSIP Rate:\n"
-        f"{valid_cusip_rate:.1f}%"
-    )
-
-    missing_issuers = market_df["issuer"].isna().sum() if "issuer" in market_df.columns else total_rows
-    missing_issuer_rate = missing_issuers / total_rows * 100 if total_rows > 0 else 0
-    missing_icon = "🟢" if missing_issuers == 0 else "🟡" if missing_issuer_rate <= 5 else "🔴"
-    st.caption(
-        f"{missing_icon} Missing Issuers:\n"
-        f"{missing_issuers:,}"
-    )
-
-    st.caption(
-        f"🧹 Duplicate Trades Removed:\n"
-        f"{duplicates_removed:,}"
-    )
-
-    with st.expander("Data Health methodology", expanded=False):
-        st.markdown(
-            """
-- **Data Coverage** uses the earliest and latest valid trade dates after standardization.
-- **Trades Loaded** counts trade rows available for analytics.
-- **Valid CUSIP Rate** is the share of trade rows with a usable CUSIP identifier.
-- **Missing Issuers** counts rows without an issuer after trade-description inference and issuer-mapping logic.
-- **Duplicate Trades Removed** counts exact duplicate standardized trade rows removed before analytics.
+- Seven-step workflow
+- Advanced Audit before Export
+- Reviewer handoff pack
+- Compact sidebar hierarchy
             """
         )
 
