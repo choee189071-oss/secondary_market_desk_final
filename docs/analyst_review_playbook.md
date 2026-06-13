@@ -10,8 +10,9 @@ This workstation is designed to become analyst-validated before broader use. The
 4. Open Core Charts and confirm spread trend, volume, and issuer curve are directionally sensible.
 5. Select the top CUSIP and review CUSIP Drilldown, trade path, same-bucket peers, and benchmark audit.
 6. Save any candidate to the watchlist with analyst notes.
-7. Open Export / Methodology, complete Analyst Review Mode, and download the review CSV/JSON.
-8. Update `data/golden/ladwp_expected.json` only after the analyst explicitly approves the expected values.
+7. Open Advanced Audit only when the analyst wants deeper methodology tracing, older modules, or long-form evidence.
+8. Open Export / Methodology, complete Analyst Review Mode, and download the review CSV/JSON.
+9. Update `data/golden/ladwp_expected.json` only after the analyst explicitly approves the expected values.
 
 ## Items To Lock
 

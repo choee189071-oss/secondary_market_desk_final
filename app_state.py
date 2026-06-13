@@ -43,7 +43,13 @@ WORKFLOW_STEPS = [
         "note": "Opportunity ranking, saved candidates.",
     },
     {
-        "label": "6. Export / Methodology",
+        "label": "6. Advanced Audit",
+        "short": "Advanced Audit",
+        "title": "Advanced Audit",
+        "note": "Deep checks, long-form modules, reviewer evidence.",
+    },
+    {
+        "label": "7. Export / Methodology",
         "short": "Export",
         "title": "Export / Methodology",
         "note": "Reports, downloads, assumptions, benchmark audit.",
@@ -51,4 +57,4 @@ WORKFLOW_STEPS = [
 ]
 
 WORKFLOW_LABELS = [step["label"] for step in WORKFLOW_STEPS]
-FULL_DASHBOARD_LABEL = "7. Advanced Audit"
+FULL_DASHBOARD_LABEL = "6. Advanced Audit"

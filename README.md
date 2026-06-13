@@ -58,7 +58,8 @@ The Streamlit workstation should focus on:
 3. Core Charts
 4. CUSIP Drilldown
 5. RV / Watchlist
-6. Export / Methodology
+6. Advanced Audit
+7. Export / Methodology
 
 Use `LADWP.xlsx + mmd.csv` as the working golden sample when validating methodology and UI changes.
 
@@ -66,7 +67,7 @@ Use `LADWP.xlsx + mmd.csv` as the working golden sample when validating methodol
 
 The default experience is intentionally focused:
 
-- Keep the six-step workflow as the daily path.
+- Keep the seven-step workflow as the daily path.
 - Use short indications instead of long explanatory copy.
 - Put charts before raw tables wherever possible.
 - Show conclusions, next actions, and key metrics before data tables.
@@ -83,7 +84,8 @@ The current review path is:
 3. Read Desk Snapshot before charts.
 4. Validate Core Charts and CUSIP Drilldown.
 5. Save watchlist candidates with notes.
-6. Use Export / Methodology to review the Methodology Trust Layer, complete Analyst Review Mode, and download reports.
+6. Use Advanced Audit for deeper methodology checks and older analytical modules.
+7. Use Export / Methodology to review the Methodology Trust Layer, complete Analyst Review Mode, and download reports.
 
 More detail is in `docs/analyst_review_playbook.md`.
 

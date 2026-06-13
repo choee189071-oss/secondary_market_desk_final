@@ -16,7 +16,8 @@ Issuer for demo: `{issuer}`
 4. Open `Core Charts`; review Spread Trend first, then add Volume or Curve if needed.
 5. Open `CUSIP Drilldown`; inspect top CUSIP trade path and same-bucket peers.
 6. Save any candidate to `RV / Watchlist`.
-7. Open `Export / Methodology`; complete Analyst Review Mode and download outputs.
+7. Open `Advanced Audit` if deeper methodology tracing or older modules are needed.
+8. Open `Export / Methodology`; complete Analyst Review Mode and download outputs.
 
 ## Analyst Review Checklist
 

@@ -473,7 +473,7 @@ div[data-testid="stMetric"] {
 
 .workflow-grid {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: 12px;
     margin: 18px 0 22px 0;
 }
@@ -1461,25 +1461,22 @@ WORKFLOW_GUIDANCE = {
     "5. RV / Watchlist": {
         "focus": "Rank + save",
     },
-    "6. Export / Methodology": {
-        "focus": "Review + export",
-    },
     FULL_DASHBOARD_LABEL: {
         "focus": "Advanced audit + historical modules",
+    },
+    "7. Export / Methodology": {
+        "focus": "Review + export",
     },
 }
 
 
 def _workflow_guidance_html(active_label: str, files_loaded: int, issuers_loaded: int) -> str:
     current = WORKFLOW_GUIDANCE.get(active_label, WORKFLOW_GUIDANCE["1. Upload / Data Audit"])
-    if active_label == FULL_DASHBOARD_LABEL:
-        next_label = "Return to six-step workflow / analyst review"
-    else:
-        try:
-            idx = WORKFLOW_LABELS.index(active_label)
-            next_label = WORKFLOW_LABELS[idx + 1] if idx + 1 < len(WORKFLOW_LABELS) else "Analyst review / delivery"
-        except ValueError:
-            next_label = "Upload / Data Audit"
+    try:
+        idx = WORKFLOW_LABELS.index(active_label)
+        next_label = WORKFLOW_LABELS[idx + 1] if idx + 1 < len(WORKFLOW_LABELS) else "Analyst review / delivery"
+    except ValueError:
+        next_label = "Upload / Data Audit"
     data_status = (
         f"{files_loaded:,} files / {issuers_loaded:,} issuers"
         if files_loaded
@@ -1493,7 +1490,7 @@ def _workflow_guidance_html(active_label: str, files_loaded: int, issuers_loaded
 
 
 def render_workflow_header(active_label: str, files_loaded: int = 0, issuers_loaded: int = 0):
-    """Render the six-step workstation flow as a compact visual map."""
+    """Render the workstation flow as a compact visual map."""
     html_parts = ["<div class='workflow-grid'>"]
     for idx, step in enumerate(WORKFLOW_STEPS, start=1):
         active_class = " workflow-step-active" if step["label"] == active_label else ""
@@ -1509,16 +1506,6 @@ def render_workflow_header(active_label: str, files_loaded: int = 0, issuers_loa
   <div class='workflow-step-num'>{idx:02d}</div>
   <div class='workflow-step-title'>{step['title']}</div>
   <div class='workflow-step-note'>{note}</div>
-</div>
-"""
-        )
-    if active_label == FULL_DASHBOARD_LABEL:
-        html_parts.append(
-            """
-<div class='workflow-step workflow-step-active'>
-  <div class='workflow-step-num'>07</div>
-  <div class='workflow-step-title'>Advanced Audit</div>
-  <div class='workflow-step-note'>Full workstation, methodology tracing, older modules.</div>
 </div>
 """
         )
@@ -1545,7 +1532,7 @@ def render_advanced_audit_gateway(
   <div class="advanced-gateway-title">Advanced Audit Workspace</div>
   <div class="advanced-gateway-copy">
     This section keeps the full long-form workstation available for reviewer checks, methodology tracing,
-    and older analytical modules. Use the six-step workflow for normal analysis; use this page when you need
+    and older analytical modules. Use this page after RV / Watchlist and before final export when you need
     deeper evidence for <b>{safe_issuer}</b>, sector context, benchmark diagnostics, or export support.
   </div>
   <div class="focus-band">
@@ -1764,7 +1751,7 @@ def render_focused_workflow(
         render_focused_cusip_drilldown(issuer_trades, selected_issuer)
     elif workflow_view == "5. RV / Watchlist":
         render_focused_rv_watchlist(issuer_trades, selected_issuer)
-    elif workflow_view == "6. Export / Methodology":
+    elif workflow_view == "7. Export / Methodology":
         render_focused_export_methodology(
             selected_issuer, selected_sector, market_df, issuer_trades, issuer_bonds, mmd_df,
             benchmark_source_mode, benchmark_priority, benchmark_conflict_policy,
@@ -1920,11 +1907,11 @@ with st.sidebar:
     st.header("Workflow")
     workflow_view = st.radio(
         "Workspace section",
-        WORKFLOW_LABELS + [FULL_DASHBOARD_LABEL],
+        WORKFLOW_LABELS,
         index=0,
-        help="Use the focused six-step flow for day-to-day work. Advanced Audit keeps the full long-form workstation available for reviewer checks.",
+        help="Use the focused workflow from upload through review and final export. Advanced Audit keeps the full long-form workstation available for reviewer checks.",
     )
-    st.caption("Daily workflow: use the six focused pages. Open Advanced Audit for deep methodology checks and older analytical modules.")
+    st.caption("Daily workflow: upload, analyze, drill down, review in Advanced Audit, then export.")
     st.markdown("---")
     st.header("Performance")
     PERFORMANCE_MODE = st.checkbox(
@@ -2028,7 +2015,7 @@ trade_payloads = [(f.name, f.getvalue()) for f in trade_files]
 issuer_mapping_payload = (issuer_mapping_file.name, issuer_mapping_file.getvalue()) if issuer_mapping_file else None
 mmd_payload = (mmd_file.name, mmd_file.getvalue()) if (use_external_mmd_fallback and mmd_file) else None
 show_file_audit = workflow_view in {"1. Upload / Data Audit", FULL_DASHBOARD_LABEL}
-show_methodology_audit = workflow_view in {"1. Upload / Data Audit", "6. Export / Methodology", FULL_DASHBOARD_LABEL}
+show_methodology_audit = workflow_view in {"1. Upload / Data Audit", "7. Export / Methodology", FULL_DASHBOARD_LABEL}
 
 # -----------------------------------------------------------------------------
 # File-readiness gate: inspect the uploaded files before running full analytics.
