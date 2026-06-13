@@ -245,9 +245,10 @@ def render_focused_snapshot(
     )
     for bullet in bullets:
         st.markdown(f"- {bullet}")
+    st.info("Next: open Core Charts to validate the signal visually, then use CUSIP Drilldown for the top candidate.")
 
     if not cusip_summary.empty:
-        st.subheader("Top 5 Opportunities")
+        st.subheader("Top Opportunities")
         opps = cusip_summary.head(5).copy()
         if "current_spread_bps" in opps.columns:
             opps["current_spread_bps"] = pd.to_numeric(opps["current_spread_bps"], errors="coerce").round(1)
@@ -267,17 +268,39 @@ def render_focused_snapshot(
             "cusip", "signal", "maturity_bucket", "current_spread_bps", "liquidity_score",
             "rv_score", "trade_count", "total_trade_amount", "latest_trade", "snapshot_reason",
         ]
-        safe_dataframe(opps[[c for c in display_cols if c in opps.columns]], hide_index=True, auto_collapse=False)
+        top_card_cols = st.columns(min(3, len(opps)))
+        for idx, (_, row) in enumerate(opps.head(3).iterrows()):
+            with top_card_cols[idx]:
+                clean_metric_card(
+                    str(row.get("cusip", "N/A")),
+                    row.get("signal", "Monitor"),
+                    size="small",
+                    note=(
+                        f"Spread {_fmt_bps(row.get('current_spread_bps'))} | "
+                        f"RV {_fmt_num(row.get('rv_score'))}"
+                    ),
+                )
+        with st.expander("Top 5 opportunity table", expanded=False):
+            safe_dataframe(opps[[c for c in display_cols if c in opps.columns]], hide_index=True, auto_collapse=False)
     else:
         st.info("No CUSIP-level opportunity table is available for the current filter.")
 
-    st.subheader("Methodology Warnings")
     warning_cards = _build_snapshot_methodology_cards(
         issuer_df=issuer_base,
         mmd_df=mmd_df,
         benchmark_source_mode=benchmark_source_mode,
     )
-    _render_card_grid(warning_cards, "status-card-grid")
+    warn_count = sum(1 for card in warning_cards if card["status"] == "warn")
+    bad_count = sum(1 for card in warning_cards if card["status"] == "bad")
+    if bad_count:
+        st.error(f"Methodology check has {bad_count} blocking issue(s) and {warn_count} warning(s). Open details before using outputs.")
+    elif warn_count:
+        st.warning(f"Methodology check has {warn_count} warning(s). Open details before sending the report.")
+    else:
+        st.success("Methodology check is clear for the current focused workflow.")
+
+    with st.expander("Methodology warning cards", expanded=bad_count > 0):
+        _render_card_grid(warning_cards, "status-card-grid")
 
     with st.expander("Snapshot calculation notes", expanded=False):
         st.markdown(

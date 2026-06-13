@@ -95,12 +95,25 @@ def render_focused_core_charts(
             & (chart_base_all["trade_date"].dt.date <= chart_end_date)
         ].copy()
 
+    visible_charts = st.multiselect(
+        "Visible Chart Modules",
+        ["Spread Trend", "Volume & Activity", "Issuer Curve"],
+        default=["Spread Trend"],
+        key="focused_core_visible_charts",
+        help="Keep the default short while reviewing. Add volume or curve only when that evidence is needed.",
+    )
+
     freq_map = {"Daily": "D", "Weekly": "W", "Monthly": "M"}
     period_freq = freq_map.get(trend_frequency, "W")
     chart_base = chart_base_all[chart_base_all["issuer"].astype(str).isin(chart_issuers)].copy()
 
-    st.subheader("Spread Trend")
-    if not chart_base.empty and {"trade_date", "spread_bps", "issuer"}.issubset(chart_base.columns):
+    if not visible_charts:
+        st.info("Select at least one chart module to display.")
+        return
+
+    if "Spread Trend" in visible_charts:
+        st.subheader("Spread Trend")
+    if "Spread Trend" in visible_charts and not chart_base.empty and {"trade_date", "spread_bps", "issuer"}.issubset(chart_base.columns):
         spread_points = chart_base.dropna(subset=["trade_date", "spread_bps"]).copy()
         spread_trend = (
             spread_points.groupby([pd.Grouper(key="trade_date", freq=period_freq), "issuer"], as_index=False)
@@ -194,15 +207,16 @@ def render_focused_core_charts(
                 margin=dict(l=40, r=40, t=70, b=45),
             )
             safe_plotly_chart(fig, width="stretch")
-            st.caption("Data table for spread trend")
-            safe_dataframe(spread_trend, hide_index=True, top_rows=8)
+            with st.expander("Spread trend data", expanded=False):
+                safe_dataframe(spread_trend, hide_index=True, top_rows=8)
         else:
             st.info("No spread trend traces were available for the selected filters.")
-    else:
+    elif "Spread Trend" in visible_charts:
         st.info("Spread trend needs issuer, trade_date, and spread or index_rate/yield fields.")
 
-    st.subheader("Volume & Activity")
-    if not chart_base.empty and {"trade_date", "trade_amount", "issuer"}.issubset(chart_base.columns):
+    if "Volume & Activity" in visible_charts:
+        st.subheader("Volume & Activity")
+    if "Volume & Activity" in visible_charts and not chart_base.empty and {"trade_date", "trade_amount", "issuer"}.issubset(chart_base.columns):
         vol = chart_base.copy()
         vol = vol.dropna(subset=["trade_date"])
         vol["period"] = vol["trade_date"].dt.to_period(period_freq).dt.to_timestamp()
@@ -294,10 +308,13 @@ def render_focused_core_charts(
         safe_plotly_chart(fig_vol, width="stretch")
 
         volume_table = volume_by_group.merge(volume_total[["period", "total_volume", "total_trade_count", "selected_issuer_share"]], on="period", how="left")
-        st.caption("Data table for volume and activity")
-        safe_dataframe(volume_table, hide_index=True, top_rows=8)
-    else:
+        with st.expander("Volume and activity data", expanded=False):
+            safe_dataframe(volume_table, hide_index=True, top_rows=8)
+    elif "Volume & Activity" in visible_charts:
         st.info("Volume chart needs trade_date, trade_amount, and issuer fields.")
+
+    if "Issuer Curve" not in visible_charts:
+        return
 
     st.subheader("Issuer Curve")
     curve_source = issuer_trades.copy()
@@ -459,10 +476,10 @@ def render_focused_core_charts(
             pd.to_numeric(curve_table["avg_yield"], errors="coerce")
             - pd.to_numeric(curve_table["benchmark_yield"], errors="coerce")
         ) * 100
-    st.caption("Data table for issuer curve")
     display_cols = [
         "maturity_year", "avg_yield", "benchmark_rating", "benchmark_yield",
         "spread_to_benchmark_bps", "trade_count", "total_par", "latest_trade",
         "mmd_tenor", "benchmark_source", "source_column", "rating_spread_bps",
     ]
-    safe_dataframe(curve_table[[c for c in display_cols if c in curve_table.columns]], hide_index=True, top_rows=12)
+    with st.expander("Issuer curve data", expanded=False):
+        safe_dataframe(curve_table[[c for c in display_cols if c in curve_table.columns]], hide_index=True, top_rows=12)

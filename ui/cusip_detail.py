@@ -190,17 +190,18 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
     with c5:
         clean_metric_card("Trades", f"{int(selected_row.get('trade_count', 0)):,}", size="small")
 
-    d1, d2, d3, d4, d5 = st.columns(5)
-    with d1:
-        clean_metric_card("Latest Trade", _fmt_date(latest_date) if pd.notna(latest_date) else "N/A", size="small")
-    with d2:
-        clean_metric_card("Latest Yield", _fmt_pct(latest_yield), size="small")
-    with d3:
-        clean_metric_card("Latest Price", _fmt_num(latest_price), size="small")
-    with d4:
-        clean_metric_card("Total Par", _fmt_mm(total_par), size="small")
-    with d5:
-        clean_metric_card("Path Change", _fmt_bps(spread_change), size="small")
+    with st.expander("More CUSIP metrics", expanded=False):
+        d1, d2, d3, d4, d5 = st.columns(5)
+        with d1:
+            clean_metric_card("Latest Trade", _fmt_date(latest_date) if pd.notna(latest_date) else "N/A", size="small")
+        with d2:
+            clean_metric_card("Latest Yield", _fmt_pct(latest_yield), size="small")
+        with d3:
+            clean_metric_card("Latest Price", _fmt_num(latest_price), size="small")
+        with d4:
+            clean_metric_card("Total Par", _fmt_mm(total_par), size="small")
+        with d5:
+            clean_metric_card("Path Change", _fmt_bps(spread_change), size="small")
 
     st.subheader("Analyst Read-Through")
     readthrough = [
@@ -313,9 +314,9 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
     else:
         st.info("No dated trade path is available for the selected CUSIP.")
 
-    st.subheader("Trade Detail")
-    display_cols = ["trade_date", "trade_type", "yield", "price", "trade_amount", "spread_bps", "maturity_bucket", "description"]
-    safe_dataframe(detail[[c for c in display_cols if c in detail.columns]].sort_values("trade_date", ascending=False), hide_index=True)
+    with st.expander("Raw trade detail", expanded=False):
+        display_cols = ["trade_date", "trade_type", "yield", "price", "trade_amount", "spread_bps", "maturity_bucket", "description"]
+        safe_dataframe(detail[[c for c in display_cols if c in detail.columns]].sort_values("trade_date", ascending=False), hide_index=True)
 
     if pd.notna(bucket):
         st.subheader("Same-Bucket Peers")
@@ -324,12 +325,6 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
         peer_median_spread = pd.to_numeric(peers["current_spread_bps"], errors="coerce").median()
         peers["peer_median_gap_bps"] = pd.to_numeric(peers["current_spread_bps"], errors="coerce") - peer_median_spread
         peers = peers.sort_values(["rv_score", "liquidity_score", "trade_count"], ascending=False)
-        peer_cols = [
-            "cusip", "is_selected", "signal", "current_spread_bps", "peer_median_gap_bps",
-            "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
-        ]
-        safe_dataframe(peers[[c for c in peer_cols if c in peers.columns]].head(20), hide_index=True)
-
         if not peers.empty and pd.notna(peer_median_spread):
             selected_gap = peers.loc[peers["is_selected"], "peer_median_gap_bps"]
             selected_gap_val = selected_gap.iloc[0] if not selected_gap.empty else pd.NA
@@ -337,6 +332,12 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
                 f"Same-bucket median spread is {_fmt_bps(peer_median_spread)}. "
                 f"{selected_cusip} screens {_fmt_bps(selected_gap_val)} versus that peer median."
             )
+        peer_cols = [
+            "cusip", "is_selected", "signal", "current_spread_bps", "peer_median_gap_bps",
+            "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
+        ]
+        with st.expander("Same-bucket peer table", expanded=False):
+            safe_dataframe(peers[[c for c in peer_cols if c in peers.columns]].head(20), hide_index=True)
 
 
 def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: str):
@@ -406,7 +407,10 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
             clean_metric_card("Top Liquidity", _fmt_num(ranked["liquidity_score"].max()), size="small")
         with r4:
             clean_metric_card("Median Peer Gap", _fmt_bps(ranked["peer_median_gap_bps"].median()), size="small")
-        safe_dataframe(ranked[[c for c in display_cols if c in ranked.columns]].head(50), hide_index=True)
+        st.caption("Top 10 candidates. Expand for the broader ranked list.")
+        safe_dataframe(ranked[[c for c in display_cols if c in ranked.columns]].head(10), hide_index=True, auto_collapse=False)
+        with st.expander("Full opportunity ranking preview", expanded=False):
+            safe_dataframe(ranked[[c for c in display_cols if c in ranked.columns]].head(50), hide_index=True)
 
     st.subheader("Watchlist")
     _focused_watchlist_records()
@@ -444,7 +448,8 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
             "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
             "note", "source", "updated_at",
         ]
-        safe_dataframe(saved[[c for c in saved_display_cols if c in saved.columns]], hide_index=True, auto_collapse=False)
+        with st.expander("Saved candidate table", expanded=False):
+            safe_dataframe(saved[[c for c in saved_display_cols if c in saved.columns]], hide_index=True, auto_collapse=False)
 
         edit_col1, edit_col2 = st.columns([1, 2])
         with edit_col1:

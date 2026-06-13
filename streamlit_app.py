@@ -1805,8 +1805,9 @@ with st.sidebar:
         "Workspace section",
         WORKFLOW_LABELS + [FULL_DASHBOARD_LABEL],
         index=0,
-        help="Use the focused six-step flow for day-to-day work. Full Dashboard keeps the original long-form workstation available.",
+        help="Use the focused six-step flow for day-to-day work. Advanced / Legacy Dashboard keeps the original long-form workstation available.",
     )
+    st.caption("Daily workflow: use the six focused pages. Open the legacy dashboard only for deep audits or older modules.")
     st.markdown("---")
     st.header("Performance")
     PERFORMANCE_MODE = st.checkbox(

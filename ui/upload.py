@@ -310,34 +310,35 @@ def render_focused_upload_audit(
                 "Missing Recommended": ", ".join(mmd_report.get("missing_recommended", [])) or "None",
             }
         )
-    if audit_rows:
-        st.subheader("File Readiness Summary")
-        safe_dataframe(pd.DataFrame(audit_rows), width="stretch", hide_index=True, auto_collapse=False)
+    with st.expander("Audit Details / Benchmark Methodology", expanded=readiness.get("status") == "bad"):
+        if audit_rows:
+            st.subheader("File Readiness Summary")
+            safe_dataframe(pd.DataFrame(audit_rows), width="stretch", hide_index=True, auto_collapse=False)
 
-    coverage_rows = [
-        {"Metric": "Trade date coverage", "Value": _workflow_date_range_text(market_df)},
-        {"Metric": "Security reference rows", "Value": f"{len(bonds_df):,}"},
-        {"Metric": "Issuer master rows", "Value": f"{len(issuer_master):,}"},
-        {"Metric": "Benchmark rows", "Value": f"{len(mmd_df):,}"},
-        {"Metric": "Failed files", "Value": ", ".join(map(str, failed_files)) if failed_files else "None"},
-    ]
-    st.subheader("Data Coverage")
-    safe_dataframe(pd.DataFrame(coverage_rows), width="stretch", hide_index=True, auto_collapse=False)
+        coverage_rows = [
+            {"Metric": "Trade date coverage", "Value": _workflow_date_range_text(market_df)},
+            {"Metric": "Security reference rows", "Value": f"{len(bonds_df):,}"},
+            {"Metric": "Issuer master rows", "Value": f"{len(issuer_master):,}"},
+            {"Metric": "Benchmark rows", "Value": f"{len(mmd_df):,}"},
+            {"Metric": "Failed files", "Value": ", ".join(map(str, failed_files)) if failed_files else "None"},
+        ]
+        st.subheader("Data Coverage")
+        safe_dataframe(pd.DataFrame(coverage_rows), width="stretch", hide_index=True, auto_collapse=False)
 
-    st.subheader("Benchmark Priority / MMD Logic")
-    mmd_logic_rows = [
-        {"Policy Item": "Uploaded MMD role", "Current Setting": "AAA benchmark curve when external MMD fallback is active"},
-        {"Policy Item": "Benchmark priority", "Current Setting": "Trade Sheet Index / Index Rate first; uploaded MMD fallback second"},
-        {"Policy Item": "External MMD fallback toggle", "Current Setting": "Enabled" if use_external_mmd_fallback else "Disabled"},
-        {"Policy Item": "MMD file provided", "Current Setting": "Yes" if mmd_file_provided else "No"},
-        {"Policy Item": "Active benchmark source", "Current Setting": benchmark_source_mode},
-        {"Policy Item": "Mixing policy", "Current Setting": "Never mix trade-sheet index rates and uploaded MMD in the same run"},
-    ]
-    safe_dataframe(pd.DataFrame(mmd_logic_rows), width="stretch", hide_index=True, auto_collapse=False)
+        st.subheader("Benchmark Priority / MMD Logic")
+        mmd_logic_rows = [
+            {"Policy Item": "Uploaded MMD role", "Current Setting": "AAA benchmark curve when external MMD fallback is active"},
+            {"Policy Item": "Benchmark priority", "Current Setting": "Trade Sheet Index / Index Rate first; uploaded MMD fallback second"},
+            {"Policy Item": "External MMD fallback toggle", "Current Setting": "Enabled" if use_external_mmd_fallback else "Disabled"},
+            {"Policy Item": "MMD file provided", "Current Setting": "Yes" if mmd_file_provided else "No"},
+            {"Policy Item": "Active benchmark source", "Current Setting": benchmark_source_mode},
+            {"Policy Item": "Mixing policy", "Current Setting": "Never mix trade-sheet index rates and uploaded MMD in the same run"},
+        ]
+        safe_dataframe(pd.DataFrame(mmd_logic_rows), width="stretch", hide_index=True, auto_collapse=False)
 
-    st.subheader("Fixed Benchmark / Methodology Audit")
-    if render_benchmark_methodology_block is not None:
-        render_benchmark_methodology_block(mmd_df, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
+        st.subheader("Fixed Benchmark / Methodology Audit")
+        if render_benchmark_methodology_block is not None:
+            render_benchmark_methodology_block(mmd_df, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
 
 
 def display_validation_report(title: str, report: dict, warnings: list[str] | None = None):
