@@ -1,6 +1,6 @@
 # Streamlit Secondary Market Workstation
 
-This repository is the Streamlit-focused analysis workstation for municipal secondary-market review. It keeps the workflow centered on Python, Streamlit, uploaded trade files, benchmark curves, CUSIP drilldown, RV screening, and reportable analyst output.
+This repository is the Streamlit-focused trading analysis workstation for municipal secondary-market review. It keeps the workflow centered on uploaded trade files, interactive trading filters, liquidity analysis, CUSIP drilldown, peer comparison, and reportable analyst output.
 
 The goal is to make the Streamlit version accurate, visual, and analyst-friendly before deciding what should ever be productized elsewhere.
 
@@ -42,7 +42,6 @@ streamlit run streamlit_app_duckdb.py
 Required or primary:
 
 - MuniPro trade-history export, preferably `.xlsx`
-- AAA MMD curve file, such as `mmd.csv`
 
 Optional:
 
@@ -53,43 +52,43 @@ Optional:
 
 The Streamlit workstation should focus on:
 
-1. Upload / Data Audit
-2. Desk Snapshot
-3. Core Charts
-4. CUSIP Drilldown
-5. RV / Watchlist
-6. Advanced Audit
-7. Export / Methodology
+1. Issuer Selection
+2. Trading Filters
+3. Market Analytics
+4. Security Drilldown
+5. Peer Comparison
+6. Narrative Insights
+7. Export
 
-Use `LADWP.xlsx + mmd.csv` as the working golden sample when validating methodology and UI changes.
+Use `LADWP.xlsx` as the working golden trade sample when validating methodology and UI changes. Benchmark fields from the trade sheet can still support spread calculations, but MMD file management is no longer part of the default user workflow.
 
 ## UI Direction
 
 The default experience is intentionally focused:
 
-- Keep the seven-step workflow as the daily path.
+- Keep the Trading Workbench sections in the main page as the daily path.
 - Use short indications instead of long explanatory copy.
 - Put charts before raw tables wherever possible.
 - Show conclusions, next actions, and key metrics before data tables.
 - Keep detailed audit tables, methodology evidence, and large ranking tables inside expanders.
 - Render only the chart modules the analyst selects.
-- Keep Advanced Audit available for deep methodology checks and older modules, but do not make it the default reading path.
+- Keep legacy methodology and export code available internally, but do not make it the default reading path.
 
 ## Analyst Validation Workflow
 
 The current review path is:
 
-1. Upload trade files and AAA MMD.
-2. Confirm Data Audit and Ready to Analyze.
-3. Read Desk Snapshot before charts.
-4. Validate Core Charts and CUSIP Drilldown.
-5. Save watchlist candidates with notes.
-6. Use Advanced Audit for deeper methodology checks and older analytical modules.
-7. Use Export / Methodology to review the Methodology Trust Layer, complete Analyst Review Mode, and download reports.
+1. Upload trade files.
+2. Select sector, issuer, and date range.
+3. Apply maturity, trade-size, trade-type, and lot/block filters.
+4. Validate market analytics: volume overview, activity heatmap, participation, and liquidity.
+5. Review the CUSIP-level security drilldown.
+6. Compare peer issuers under the same filters.
+7. Export filtered trades, security drilldown, peer metrics, Excel workbook, or PDF summary.
 
 More detail is in `docs/analyst_review_playbook.md`.
 
-For external or professional review sessions, use `docs/reviewer_handoff_pack.md`. The same one-page handoff can also be downloaded from Export / Methodology inside the app.
+For external or professional review sessions, use `docs/reviewer_handoff_pack.md`.
 
 ## Golden Regression Check
 
@@ -111,17 +110,15 @@ python scripts/regression_check.py --expected-file data/golden/ladwp_expected.js
 
 ## Reports And Review Outputs
 
-The Export / Methodology page can generate:
+The Trading Workbench export section can generate:
 
-- Markdown report
-- Print HTML report
-- ZIP report bundle
-- Watchlist CSV
+- Filtered trades CSV
+- Security drilldown CSV
+- Peer comparison CSV inside the Excel workbook
+- Excel workbook
 - PDF summary
-- PPTX outline
-- Analyst review CSV/JSON
 
-PDF requires `reportlab`; PPTX requires `python-pptx`. Both are included in `requirements.txt`.
+PDF requires `reportlab`; Excel requires `openpyxl`. Both are included in `requirements.txt`.
 
 ## NextSR Payload Utility
 

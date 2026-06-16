@@ -11,10 +11,10 @@ This project should be treated as a private analysis workstation while it uses M
 
 ## Benchmark Policy
 
-- Uploaded MMD is treated as the AAA curve.
-- Trade Sheet `Index Rate` / `Spread` remains the active benchmark source when available.
-- Uploaded MMD is used as fallback only when trade-sheet benchmark data is unavailable.
-- Ratings, sector, liquidity, and callable effects are disclosed separately instead of embedded into the benchmark spread.
+- The default Trading Workbench does not require an uploaded MMD file.
+- Trade Sheet `Index Rate` / `Spread` can still support spread calculations when available.
+- Benchmark file management is hidden from the normal user flow so analysts focus on trading activity, liquidity, participation, and CUSIP-level investigation.
+- Ratings, sector, liquidity, and callable effects should remain disclosed separately from any benchmark spread.
 
 ## Deployment Checklist
 
@@ -29,4 +29,4 @@ Before sharing with professional analysts:
 
 ## Analyst Sharing Mode
 
-For review sessions, ask analysts to focus on the Export / Methodology page after using the workflow. Analyst Review Mode captures approved expected values and notes without requiring code changes.
+For review sessions, ask analysts to use the Trading Workbench in order: Issuer Selection, Trading Filters, Market Analytics, Security Drilldown, Peer Comparison, Narrative Insights, and Export.

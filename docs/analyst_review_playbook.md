@@ -4,15 +4,16 @@ This workstation is designed to become analyst-validated before broader use. The
 
 ## Review Order
 
-1. Upload the trusted trade file and AAA MMD file.
-2. Confirm Data Audit shows required trade fields, date coverage, CUSIP quality, and benchmark policy.
-3. Review Desk Snapshot before charts.
-4. Open Core Charts and confirm spread trend, volume, and issuer curve are directionally sensible.
-5. Select the top CUSIP and review CUSIP Drilldown, trade path, same-bucket peers, and benchmark audit.
-6. Save any candidate to the watchlist with analyst notes.
-7. Open Advanced Audit only when the analyst wants deeper methodology tracing, older modules, or long-form evidence.
-8. Open Export / Methodology, complete Analyst Review Mode, and download the review CSV/JSON.
-9. Update `data/golden/ladwp_expected.json` only after the analyst explicitly approves the expected values.
+1. Upload the trusted trade file.
+2. Confirm required trade fields, date coverage, CUSIP quality, and trade amount scaling.
+3. Select sector, issuer, and date range.
+4. Apply maturity, trade-size, trade-type, and lot/block filters.
+5. Review market analytics: volume overview, activity heatmap, participation, and liquidity.
+6. Select the top CUSIP and review security drilldown, trade path, and source rows.
+7. Compare peer issuers under the same trading filters.
+8. Review narrative observations and confirm each one is supported by filtered data.
+9. Export CSV/Excel/PDF outputs for review.
+10. Update `data/golden/ladwp_expected.json` only after the analyst explicitly approves the expected values.
 
 ## Items To Lock
 
@@ -20,10 +21,12 @@ This workstation is designed to become analyst-validated before broader use. The
 - Trade row count after upload processing.
 - CUSIP count and CUSIP quality.
 - Date range.
-- Median spread and liquidity.
-- Top CUSIP and top-candidate scoring.
-- Benchmark audit logic for selected CUSIP.
-- Report outputs: Markdown, HTML, PDF, PPTX, and bundle.
+- Trade amount scaling and trade-size buckets.
+- Trade type classification.
+- Maturity bucket boundaries.
+- Top CUSIP and security drilldown metrics.
+- Peer comparison metrics under equivalent filters.
+- Report outputs: CSV, Excel, and PDF summary.
 
 ## Review Status Meaning
 

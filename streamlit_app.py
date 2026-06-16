@@ -86,6 +86,7 @@ from ui.snapshot import (
     _build_snapshot_takeaway,
     render_focused_snapshot,
 )
+from ui.trading_workbench import render_trading_workbench
 from ui.upload import (
     display_validation_report,
     render_focused_upload_audit,
@@ -1993,20 +1994,13 @@ with st.sidebar:
         """
 <div class="sidebar-brand">
   <div class="sidebar-brand-title">Secondary Market Desk</div>
-  <div class="sidebar-brand-subtitle">Upload, analyze, review, export.</div>
+  <div class="sidebar-brand-subtitle">Trading analysis workbench</div>
 </div>
 """,
         unsafe_allow_html=True,
     )
-    sidebar_section_label("Workflow")
-    workflow_view = st.radio(
-        "Workspace",
-        WORKFLOW_LABELS,
-        index=0,
-        help="Use the focused workflow from upload through review and final export. Advanced Audit keeps the full long-form workstation available for reviewer checks.",
-        label_visibility="collapsed",
-    )
-    sidebar_status_card("Next", "Upload file" if workflow_view == "1. Upload / Data Audit" else workflow_view.split(". ", 1)[-1])
+    workflow_view = "Trading Workbench"
+    sidebar_status_card("Mode", "Trading Workbench", "Controls live in the main page.")
     with st.expander("System", expanded=False):
         PERFORMANCE_MODE = st.checkbox(
             "Fast mode",
@@ -2044,7 +2038,7 @@ with st.sidebar:
 
 with st.expander(
     "Upload Center",
-    expanded=(workflow_view == "1. Upload / Data Audit"),
+    expanded=True,
 ):
     st.markdown(
         "<div class='focus-band'><b>Input:</b> trade files required; reference files optional.</div>",
@@ -2064,22 +2058,9 @@ with st.expander(
     with upload_col2:
         bond_file = st.file_uploader("Bond Reference File — optional enrichment", type=["csv", "xlsx", "xls"])
         issuer_mapping_file = st.file_uploader("Issuer / Sector Mapping — optional", type=["csv", "xlsx", "xls"])
-        use_external_mmd_fallback = st.checkbox(
-            "Enable External MMD Fallback",
-            value=False,
-            help=(
-                "Off by default to prevent memory overload. The app uses Trade Sheet Index / Index Rate first. "
-                "Only enable this if your trade files do not have usable Index Rate data."
-            ),
-        )
-        mmd_file = st.file_uploader(
-            "MMD Curve File — optional fallback",
-            type=["csv", "xlsx", "xls"],
-            disabled=not use_external_mmd_fallback,
-            help="Loaded only when External MMD Fallback is enabled and trade-sheet Index Rate is unavailable.",
-        )
-        if not use_external_mmd_fallback:
-            st.caption("External MMD loading is off. This avoids benchmark-source conflict and protects memory.")
+        use_external_mmd_fallback = False
+        mmd_file = None
+        st.caption("Benchmark file management is hidden. Trading analytics use the uploaded trade tape.")
 
     render_upload_file_cards(
         trade_file_names=[f.name for f in trade_files] if trade_files else [],
@@ -2092,11 +2073,9 @@ with st.expander(
     with st.expander("Download blank templates", expanded=False):
         template_download_button(TRADE_REQUIRED + TRADE_RECOMMENDED + TRADE_OPTIONAL, "Trade template CSV", "trade_history_template.csv")
         template_download_button(BOND_REQUIRED + BOND_RECOMMENDED + BOND_OPTIONAL, "Optional bond reference template CSV", "bond_reference_template.csv")
-        template_download_button(CURVE_TEMPLATE_COLUMNS, "Fallback MMD curve template CSV", "benchmark_curve_template.csv")
 
 if not trade_files:
-    render_workflow_header(workflow_view, files_loaded=0, issuers_loaded=0)
-    st.info("Upload at least one MuniPro trade-history file to generate the dashboard. Bond reference data is optional enrichment.")
+    st.info("Upload at least one MuniPro trade-history file to open the Trading Workbench. Bond reference data is optional enrichment.")
     with st.expander("Expected file logic"):
         st.write(
             "The app now uses a trade-first workflow: it standardizes CUSIP fields, uses each trade file name as the issuer name, "
@@ -2107,9 +2086,9 @@ if not trade_files:
 bond_payload = (bond_file.name, bond_file.getvalue()) if bond_file else None
 trade_payloads = [(f.name, f.getvalue()) for f in trade_files]
 issuer_mapping_payload = (issuer_mapping_file.name, issuer_mapping_file.getvalue()) if issuer_mapping_file else None
-mmd_payload = (mmd_file.name, mmd_file.getvalue()) if (use_external_mmd_fallback and mmd_file) else None
-show_file_audit = workflow_view in {"1. Upload / Data Audit", FULL_DASHBOARD_LABEL}
-show_methodology_audit = workflow_view in {"1. Upload / Data Audit", "7. Export / Methodology", FULL_DASHBOARD_LABEL}
+mmd_payload = None
+show_file_audit = True
+show_methodology_audit = False
 
 # -----------------------------------------------------------------------------
 # File-readiness gate: inspect the uploaded files before running full analytics.
@@ -2269,6 +2248,14 @@ Trade-sheet index rates and an external MMD sheet may differ by date, tenor, rou
             width="stretch",
             hide_index=True,
         )
+
+render_trading_workbench(
+    market_df=market_df,
+    bonds_df=bonds_df,
+    issuer_master=issuer_master,
+    benchmark_source_mode=benchmark_source_mode,
+)
+st.stop()
 
 with st.sidebar:
     sidebar_section_label("Context")

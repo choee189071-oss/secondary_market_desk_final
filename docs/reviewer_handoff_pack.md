@@ -4,38 +4,35 @@ Use this page when asking a professional analyst to review the Streamlit worksta
 
 ## Demo Flow
 
-1. Upload trusted trade file and AAA MMD file.
-2. Open `Upload / Data Audit`; confirm ready status and benchmark source.
-3. Open `Desk Snapshot`; review headline metrics and top names.
-4. Open `Core Charts`; review Spread Trend first, then add Volume or Curve if needed.
-5. Open `CUSIP Drilldown`; inspect top CUSIP trade path and same-bucket peers.
-6. Save any candidate to `RV / Watchlist`.
-7. Open `Advanced Audit` if deeper methodology tracing or older modules are needed.
-8. Open `Export / Methodology`; complete Analyst Review Mode and download outputs.
+1. Upload the trusted trade file.
+2. Select sector, issuer, and date range in `Issuer Selection`.
+3. Apply maturity, trade-size, trade-type, and lot/block filters in `Trading Filters`.
+4. Review `Market Analytics`: volume overview, activity heatmap, participation, and liquidity.
+5. Open `Security Drilldown`; inspect the CUSIPs driving the filtered activity.
+6. Review `Peer Comparison` under the same filters.
+7. Read `Narrative Insights` and confirm each observation is supported by the filtered data.
+8. Use `Export` to download filtered trades, security drilldown, Excel workbook, or PDF summary.
 
 ## Analyst Review Checklist
 
 - Does the selected issuer/date range match the source file?
 - Do trade rows, CUSIP count, and top CUSIP reconcile to the uploaded data?
-- Is the active benchmark source correct for this review?
-- Do median spread and liquidity look reasonable?
-- Does Spread Trend tell the right market story?
-- Does Volume support or weaken the signal?
-- Does Issuer Curve placement make sense versus reference lines?
+- Do the maturity, trade-size, trade-type, and lot/block filters behave as expected?
+- Do total par, trade count, and average trade size reconcile to the filtered source data?
+- Does the activity heatmap correctly show where trading is concentrated?
+- Does dealer/customer/interdealer participation look correct?
+- Do liquidity metrics by maturity and trade size look reasonable?
 - Does the selected CUSIP trade path reconcile to source trades?
-- Are same-bucket peers economically comparable?
-- Are watchlist candidates names an analyst would actually investigate?
+- Are peer issuers compared under equivalent trading conditions?
 - Are report exports clear enough to send for internal review?
 
 ## Known Limitations / Questions
 
-- Benchmark priority: should Trade Sheet Index / Index Rate remain primary when uploaded MMD is also available?
-- MMD treatment: uploaded MMD is currently treated as AAA; confirm this is correct for the source file.
-- Rating fallback: when ratings are missing, the app falls back to sector and maturity. Confirm whether this is acceptable.
-- Liquidity score: current score blends trade count, par amount, and recency. Confirm weighting.
-- RV score: current score is a screening blend of spread rank and liquidity rank. Confirm weighting and thresholds.
-- Callable, sector, and liquidity effects are displayed separately, not embedded into benchmark spread. Confirm this methodology.
-- Watchlist saves candidates for the active Streamlit session; confirm whether persistent storage is needed.
+- Trade type classification is inferred from source text such as Customer Bought, Customer Sold, Dealer, and Inter-Dealer. Confirm naming conventions.
+- Trade-size buckets assume trade amount is reported as par amount in dollars. Confirm source scaling.
+- Odd Lot / Round Lot / Block Trade is inferred from par size. Confirm preferred thresholds.
+- Liquidity is currently displayed from trade frequency, par amount, spread/yield, and recency; confirm whether a formal liquidity score is needed.
+- MMD file management is hidden in the default workflow; trade-sheet benchmark fields may still support spread calculations when present.
 
 ## Feedback Format
 

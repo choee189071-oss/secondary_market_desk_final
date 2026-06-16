@@ -85,6 +85,7 @@ COMPILE_TARGETS = [
     "ui/export_center.py",
     "ui/upload.py",
     "ui/snapshot.py",
+    "ui/trading_workbench.py",
     "scripts/build_duckdb.py",
     "scripts/build_nextsr_payload.py",
     "scripts/regression_check.py",

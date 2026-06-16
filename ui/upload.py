@@ -62,15 +62,18 @@ def render_upload_file_cards(
             "value": issuer_mapping_file_name or "Not uploaded",
             "detail": "Issuer / sector labels.",
         },
-        {
-            "class_name": "file-card",
-            "status": "good" if mmd_file_name else ("warn" if use_external_mmd_fallback else "neutral"),
-            "kicker": "Optional benchmark",
-            "title": "MMD / AAA curve",
-            "value": mmd_file_name or ("Fallback enabled; no file selected" if use_external_mmd_fallback else "Fallback disabled"),
-            "detail": "AAA fallback curve.",
-        },
     ]
+    if mmd_file_name or use_external_mmd_fallback:
+        cards.append(
+            {
+                "class_name": "file-card",
+                "status": "good" if mmd_file_name else "warn",
+                "kicker": "Optional benchmark",
+                "title": "MMD / AAA curve",
+                "value": mmd_file_name or "Fallback enabled; no file selected",
+                "detail": "AAA fallback curve.",
+            }
+        )
     _render_card_grid(cards, "file-card-grid")
 
 
