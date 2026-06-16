@@ -2255,7 +2255,20 @@ render_trading_workbench(
     issuer_master=issuer_master,
     benchmark_source_mode=benchmark_source_mode,
 )
-st.stop()
+st.markdown("---")
+st.markdown(
+    """
+<div class="advanced-gateway">
+  <div class="advanced-gateway-title">Full Chart Library / Advanced Audit</div>
+  <div class="advanced-gateway-copy">
+    The Trading Workbench above is the new front-door workflow. The full set of previously built charts,
+    drilldowns, RV views, narrative modules, and export tools remains available below for deeper analysis.
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+workflow_view = FULL_DASHBOARD_LABEL
 
 with st.sidebar:
     sidebar_section_label("Context")
