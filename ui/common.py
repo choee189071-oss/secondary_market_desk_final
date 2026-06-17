@@ -64,6 +64,7 @@ def safe_dataframe(
     max_rows: int | None = TABLE_PREVIEW_ROWS,
     auto_collapse: bool = True,
     top_rows: int = 10,
+    preview_large_tables: bool = False,
     **kwargs,
 ):
     """Render dataframes safely for focused workflow modules."""
@@ -92,14 +93,24 @@ def safe_dataframe(
 
     if auto_collapse and is_large:
         preview_rows = min(max(int(top_rows), 1), len(display_df))
-        st.caption(f"Showing top {preview_rows:,} rows. Expand for a larger preview.")
-        st.dataframe(display_df.head(preview_rows), *args, **kwargs)
+        if preview_large_tables:
+            st.caption(f"Showing top {preview_rows:,} rows. Expand for a larger preview.")
+            st.dataframe(display_df.head(preview_rows), *args, **kwargs)
+        else:
+            st.caption(f"Evidence table available: {row_count:,} rows x {col_count:,} cols.")
         with st.expander(expander_label, expanded=expanded):
             if effective_max_rows is not None and row_count > effective_max_rows:
                 st.caption(f"Large-table protection: showing first {effective_max_rows:,} of {row_count:,} rows.")
             return st.dataframe(display_df, *args, **kwargs)
 
     return st.dataframe(display_df, *args, **kwargs)
+
+
+def collapsed_dataframe(label: str, df: pd.DataFrame, *args, expanded: bool = False, **kwargs):
+    """Render an evidence/detail table only when the user asks for it."""
+    row_count = len(df) if isinstance(df, pd.DataFrame) else 0
+    with st.expander(f"{label} ({row_count:,} rows)", expanded=expanded):
+        return safe_dataframe(df, *args, auto_collapse=False, **kwargs)
 
 
 def safe_plotly_chart(fig, *args, **kwargs):

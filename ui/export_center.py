@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from engine.methodology import methodology_trust_layers
 from reports.export_center import (
     focused_report_bundle_bytes,
     focused_report_filename,
@@ -13,6 +12,7 @@ from reports.export_center import (
 )
 from reports.reviewer_handoff import reviewer_handoff_markdown
 from ui.analyst_review import render_analyst_review_mode
+from ui.methodology import render_methodology_trust_panel
 
 
 def _select_existing(df, columns: list[str]):
@@ -119,7 +119,7 @@ def render_focused_export_methodology(
         "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
     ]
     watch_cols = [
-        "cusip", "issuer", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
+        "cusip", "issuer", "status", "reason", "next_step", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
         "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
         "note", "source", "updated_at",
     ]
@@ -140,16 +140,17 @@ def render_focused_export_methodology(
         st.subheader("Core Chart Guide")
         safe_dataframe(context["chart_explanations"], hide_index=True, auto_collapse=False)
 
-    with st.expander("Methodology Trust Layer", expanded=False):
-        trust_layers = methodology_trust_layers(
-            benchmark_source_mode=benchmark_source_mode,
-            benchmark_priority=benchmark_priority,
-            benchmark_conflict_policy=benchmark_conflict_policy,
-        )
-        trust_tabs = st.tabs(list(trust_layers.keys()))
-        for tab, (layer_name, layer_df) in zip(trust_tabs, trust_layers.items()):
-            with tab:
-                safe_dataframe(layer_df, hide_index=True, auto_collapse=False)
+    render_methodology_trust_panel(
+        market_df=market_df,
+        issuer_df=issuer_trades,
+        mmd_df=mmd_df,
+        benchmark_source_mode=benchmark_source_mode,
+        benchmark_priority=benchmark_priority,
+        benchmark_conflict_policy=benchmark_conflict_policy,
+        title="Methodology Trust Layer",
+        expanded=False,
+        render_benchmark_methodology_block=render_benchmark_methodology_block,
+    )
 
     st.subheader("Downloads")
     d1, d2, d3, d4 = st.columns(4)
@@ -212,8 +213,5 @@ def render_focused_export_methodology(
     with st.expander("Preview Markdown Report", expanded=False):
         st.markdown(report_md)
 
-    with st.expander("Benchmark Audit / Methodology Appendix", expanded=False):
-        st.subheader("Methodology / Benchmark Audit")
-        render_benchmark_methodology_block(mmd_df, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
-        st.subheader("Methodology Appendix for Report")
+    with st.expander("Methodology Appendix for Report", expanded=False):
         safe_dataframe(context["methodology"], hide_index=True, auto_collapse=False)

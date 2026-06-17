@@ -505,7 +505,14 @@ def focused_report_pptx_bytes(context: dict) -> tuple[bytes | None, str | None]:
         watch_rows = []
         for _, row in context["saved_watchlist"].head(5).iterrows():
             note = str(row.get("note", "") or "").strip()
-            watch_rows.append(f"{row.get('cusip', 'N/A')}: {row.get('signal', 'Monitor')}" + (f" - {note}" if note else ""))
+            status = row.get("status", "Review")
+            next_step = str(row.get("next_step", "") or "").strip()
+            parts = [str(row.get("signal", "Monitor")), f"status {status}"]
+            if next_step:
+                parts.append(f"next: {next_step}")
+            if note:
+                parts.append(note)
+            watch_rows.append(f"{row.get('cusip', 'N/A')}: " + " - ".join(parts))
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = "Saved Watchlist"
         add_bullets(slide, watch_rows or ["No saved watchlist rows."])

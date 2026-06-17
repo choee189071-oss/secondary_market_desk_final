@@ -57,6 +57,16 @@ def render_analyst_review_mode(context: dict, selected_issuer: str, safe_datafra
         st.info("No review checklist is available for the current report context.")
         return review_df
 
+    status_counts = review_df["Status"].value_counts().to_dict()
+    reviewed_count = len(review_df) - int(status_counts.get("Not Reviewed", 0))
+    wrong_count = int(status_counts.get("Wrong", 0))
+    needs_review_count = int(status_counts.get("Needs Review", 0))
+    progress_cols = st.columns(4)
+    progress_cols[0].metric("Review Progress", f"{reviewed_count}/{len(review_df)}")
+    progress_cols[1].metric("Correct", f"{int(status_counts.get('Correct', 0))}")
+    progress_cols[2].metric("Needs Review", f"{needs_review_count}")
+    progress_cols[3].metric("Wrong", f"{wrong_count}")
+
     reviewer_col, item_col = st.columns([1, 1.4])
     with reviewer_col:
         reviewer = st.text_input("Reviewer", key="analyst_review_reviewer", placeholder="Name or team")
@@ -136,18 +146,24 @@ def render_analyst_review_mode(context: dict, selected_issuer: str, safe_datafra
             mime="application/json",
         )
 
+    template = {
+        "issuer": selected_issuer,
+        "expected": {
+            str(row["Review item"]): {
+                "current_output": row.get("Current output", ""),
+                "expected_value": row.get("Analyst expected value", row.get("Suggested expected value", "")),
+                "status": row.get("Status", "Not Reviewed"),
+            }
+            for _, row in review_df.iterrows()
+        },
+    }
     with st.expander("Expected output JSON template", expanded=False):
-        template = {
-            "issuer": selected_issuer,
-            "expected": {
-                str(row["Review item"]): {
-                    "current_output": row.get("Current output", ""),
-                    "expected_value": row.get("Analyst expected value", row.get("Suggested expected value", "")),
-                    "status": row.get("Status", "Not Reviewed"),
-                }
-                for _, row in review_df.iterrows()
-            },
-        }
         st.code(json.dumps(template, indent=2, default=str), language="json")
+        st.download_button(
+            "Download Expected Output Seed",
+            data=json.dumps(template, indent=2, default=str).encode("utf-8"),
+            file_name=focused_report_filename(selected_issuer, "expected_output_seed.json"),
+            mime="application/json",
+        )
 
     return review_df

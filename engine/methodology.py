@@ -3,6 +3,178 @@ from __future__ import annotations
 import pandas as pd
 
 
+def _first_existing_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    lowered = {str(col).lower(): col for col in df.columns}
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+        match = lowered.get(candidate.lower())
+        if match is not None:
+            return match
+    return None
+
+
+def _nonnull_rate(df: pd.DataFrame, col: str | None) -> float | None:
+    if not isinstance(df, pd.DataFrame) or df.empty or not col or col not in df.columns:
+        return None
+    return float(df[col].notna().mean() * 100)
+
+
+def _numeric_rate(df: pd.DataFrame, col: str | None) -> float | None:
+    if not isinstance(df, pd.DataFrame) or df.empty or not col or col not in df.columns:
+        return None
+    return float(pd.to_numeric(df[col], errors="coerce").notna().mean() * 100)
+
+
+def _status_from_rate(rate: float | None, good_threshold: float = 80, warn_threshold: float = 40) -> str:
+    if rate is None:
+        return "bad"
+    if rate >= good_threshold:
+        return "good"
+    if rate >= warn_threshold:
+        return "warn"
+    return "bad"
+
+
+def _format_rate(rate: float | None) -> str:
+    return "N/A" if rate is None else f"{rate:.1f}%"
+
+
+def _date_range_text(df: pd.DataFrame) -> str:
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return "N/A"
+    date_col = _first_existing_col(df, ["trade_date", "date", "sale_date"])
+    if not date_col:
+        return "N/A"
+    dates = pd.to_datetime(df[date_col], errors="coerce").dropna()
+    if dates.empty:
+        return "N/A"
+    return f"{dates.min().date()} to {dates.max().date()}"
+
+
+def methodology_evidence_summary(
+    market_df: pd.DataFrame,
+    issuer_df: pd.DataFrame | None,
+    mmd_df: pd.DataFrame,
+    benchmark_source_mode: str,
+    benchmark_priority: str,
+    benchmark_conflict_policy: str,
+) -> dict[str, object]:
+    """Compact evidence layer used consistently across workflow pages."""
+    issuer_df = issuer_df if isinstance(issuer_df, pd.DataFrame) and not issuer_df.empty else market_df
+    benchmark_source = benchmark_source_mode or "No active benchmark"
+    benchmark_status = "good" if benchmark_source in {"Trade Sheet Index / Index Rate", "Uploaded MMD fallback"} else "bad"
+
+    yield_col = _first_existing_col(issuer_df, ["yield", "yield_percent", "trade_yield"])
+    index_col = _first_existing_col(issuer_df, ["index_rate", "index yield", "index_yield"])
+    spread_col = _first_existing_col(issuer_df, ["spread_bps", "current_spread_bps", "spread"])
+    cusip_col = _first_existing_col(issuer_df, ["cusip", "cusip9"])
+    maturity_col = _first_existing_col(issuer_df, ["maturity_bucket", "maturity_date", "maturity"])
+    rating_col = _first_existing_col(issuer_df, ["ratings_m_s_f", "rating", "ratings", "benchmark_rating"])
+    sector_col = _first_existing_col(issuer_df, ["sector", "sector_name", "security_sector"])
+    trade_amount_col = _first_existing_col(issuer_df, ["trade_amount", "par_amount", "par", "principal_amount"])
+
+    yield_rate = _numeric_rate(issuer_df, yield_col)
+    index_rate = _numeric_rate(issuer_df, index_col)
+    spread_rate = _numeric_rate(issuer_df, spread_col)
+    cusip_rate = _nonnull_rate(issuer_df, cusip_col)
+    maturity_rate = _nonnull_rate(issuer_df, maturity_col)
+    rating_rate = _nonnull_rate(issuer_df, rating_col)
+    sector_rate = _nonnull_rate(issuer_df, sector_col)
+    amount_rate = _numeric_rate(issuer_df, trade_amount_col)
+
+    spread_status = "good" if (yield_rate or 0) >= 80 and ((index_rate or 0) >= 50 or (spread_rate or 0) >= 50 or benchmark_status == "good") else "warn"
+    if (yield_rate or 0) < 40 and (spread_rate or 0) < 40:
+        spread_status = "bad"
+
+    peer_status = "good"
+    peer_value = f"Rating {_format_rate(rating_rate)}"
+    if rating_rate is None or rating_rate < 50:
+        peer_status = "warn" if (sector_rate or 0) >= 50 and (maturity_rate or 0) >= 70 else "bad"
+        peer_value = f"Sector {_format_rate(sector_rate)} / maturity {_format_rate(maturity_rate)}"
+
+    liquidity_status = "good" if (amount_rate or 0) >= 70 and (cusip_rate or 0) >= 90 else "warn"
+    if (cusip_rate or 0) < 60:
+        liquidity_status = "bad"
+
+    date_range = _date_range_text(issuer_df)
+    cards = [
+        {
+            "status": benchmark_status,
+            "kicker": "Benchmark",
+            "title": "Active source",
+            "value": benchmark_source,
+            "detail": benchmark_conflict_policy or "One benchmark source is used per run.",
+        },
+        {
+            "status": spread_status,
+            "kicker": "Spread",
+            "title": "Traceability",
+            "value": f"Yield {_format_rate(yield_rate)} / index {_format_rate(index_rate)}",
+            "detail": "Spread uses yield minus active benchmark, or supplied spread when available.",
+        },
+        {
+            "status": peer_status,
+            "kicker": "Peer RV",
+            "title": "Grouping basis",
+            "value": peer_value,
+            "detail": "Ratings are preferred; missing ratings fall back to sector and maturity.",
+        },
+        {
+            "status": liquidity_status,
+            "kicker": "CUSIP",
+            "title": "Detail reliability",
+            "value": f"CUSIP {_format_rate(cusip_rate)}",
+            "detail": "CUSIP, par amount, and recency drive drilldown, liquidity, and watchlist confidence.",
+        },
+    ]
+
+    evidence_rows = [
+        {
+            "Control": "Benchmark source",
+            "Current reading": benchmark_source,
+            "Status": benchmark_status,
+            "Evidence": f"Priority: {benchmark_priority or 'N/A'}; benchmark rows: {len(mmd_df) if isinstance(mmd_df, pd.DataFrame) else 0:,}",
+            "Reviewer action": "Confirm this is the expected desk benchmark for the selected issuer and date range.",
+        },
+        {
+            "Control": "Spread calculation",
+            "Current reading": f"Yield numeric {_format_rate(yield_rate)}; Index Rate numeric {_format_rate(index_rate)}; Spread numeric {_format_rate(spread_rate)}",
+            "Status": spread_status,
+            "Evidence": "Formula: issuer yield minus active benchmark yield, expressed in bps.",
+            "Reviewer action": "Spot-check several rows against source trade yield and benchmark/index rate.",
+        },
+        {
+            "Control": "Data scope",
+            "Current reading": f"{len(issuer_df):,} issuer rows; {len(market_df) if isinstance(market_df, pd.DataFrame) else 0:,} filtered market rows",
+            "Status": "good" if len(issuer_df) > 0 else "bad",
+            "Evidence": f"Trade date range: {date_range}",
+            "Reviewer action": "Confirm the active global filters match the intended review window.",
+        },
+        {
+            "Control": "Peer grouping",
+            "Current reading": f"Ratings {_format_rate(rating_rate)}; sector {_format_rate(sector_rate)}; maturity {_format_rate(maturity_rate)}",
+            "Status": peer_status,
+            "Evidence": "Ratings drive peer grouping when present; otherwise sector and maturity are used.",
+            "Reviewer action": "Review peer set quality before relying on RV ranking.",
+        },
+        {
+            "Control": "Liquidity inputs",
+            "Current reading": f"CUSIP {_format_rate(cusip_rate)}; trade amount numeric {_format_rate(amount_rate)}",
+            "Status": liquidity_status,
+            "Evidence": "Liquidity blends trade count, total par, and recency.",
+            "Reviewer action": "Treat liquidity as directional when par amount or CUSIP quality is weak.",
+        },
+    ]
+
+    return {
+        "cards": cards,
+        "evidence": pd.DataFrame(evidence_rows),
+    }
+
+
 def methodology_trust_layers(
     benchmark_source_mode: str,
     benchmark_priority: str,

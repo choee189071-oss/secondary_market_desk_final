@@ -14,7 +14,6 @@ import streamlit as st
 
 from app_state import (
     ENABLE_REPORT_EXPORTS,
-    FULL_DASHBOARD_LABEL,
     LARGE_TABLE_COL_THRESHOLD,
     LARGE_TABLE_ROW_THRESHOLD,
     MAX_HEATMAP_ROWS,
@@ -22,8 +21,6 @@ from app_state import (
     PERFORMANCE_MODE,
     SHOW_FULL_RAW_TABLES,
     TABLE_PREVIEW_ROWS,
-    WORKFLOW_LABELS,
-    WORKFLOW_STEPS,
 )
 from engine.normalize import (
     coerce_maturity_label,
@@ -74,22 +71,20 @@ from reports.export_center import (
     focused_core_chart_explanations as _focused_core_chart_explanations,
     focused_methodology_appendix as _focused_methodology_appendix,
 )
-from ui.charts import render_focused_core_charts
 from ui.cusip_detail import (
     _focused_watchlist_dataframe,
-    render_focused_cusip_drilldown,
-    render_focused_rv_watchlist,
+    _focused_watchlist_markdown,
+    _focused_watchlist_records,
+    _upsert_focused_watchlist,
 )
 from ui.export_center import render_focused_export_methodology
 from ui.snapshot import (
     _build_snapshot_methodology_cards,
     _build_snapshot_takeaway,
-    render_focused_snapshot,
 )
 from ui.trading_workbench import render_trading_workbench
 from ui.upload import (
     display_validation_report,
-    render_focused_upload_audit,
     render_upload_file_cards,
 )
 
@@ -871,6 +866,7 @@ def safe_dataframe(
     max_rows: int | None = TABLE_PREVIEW_ROWS,
     auto_collapse: bool = True,
     top_rows: int = 10,
+    preview_large_tables: bool = False,
     **kwargs,
 ):
     """Render dataframes safely for Streamlit Cloud.
@@ -910,14 +906,24 @@ def safe_dataframe(
 
     if auto_collapse and is_large:
         preview_rows = min(max(int(top_rows), 1), len(display_df))
-        st.caption(f"Showing top {preview_rows:,} rows. Expand for a larger preview.")
-        st.dataframe(display_df.head(preview_rows), *args, **kwargs)
+        if preview_large_tables:
+            st.caption(f"Showing top {preview_rows:,} rows. Expand for a larger preview.")
+            st.dataframe(display_df.head(preview_rows), *args, **kwargs)
+        else:
+            st.caption(f"Evidence table available: {row_count:,} rows x {col_count:,} cols.")
         with st.expander(expander_label, expanded=expanded):
             if effective_max_rows is not None and row_count > effective_max_rows:
                 st.caption(f"Large-table protection: showing first {effective_max_rows:,} of {row_count:,} rows.")
             return st.dataframe(display_df, *args, **kwargs)
 
     return st.dataframe(display_df, *args, **kwargs)
+
+
+def collapsed_dataframe(label: str, df: pd.DataFrame, *args, expanded: bool = False, **kwargs):
+    """Keep evidence/detail tables available without making them the default visual focus."""
+    row_count = len(df) if isinstance(df, pd.DataFrame) else 0
+    with st.expander(f"{label} ({row_count:,} rows)", expanded=expanded):
+        return safe_dataframe(df, *args, auto_collapse=False, **kwargs)
 
 
 def safe_plotly_chart(fig, *args, **kwargs):
@@ -1531,75 +1537,6 @@ def sidebar_status_card(kicker: str, value: object, note: str | None = None):
 # Focused upload helpers live in ui/upload.py; shared card helpers live in ui/common.py.
 
 
-WORKFLOW_GUIDANCE = {
-    "1. Upload / Data Audit": {
-        "focus": "Inputs + benchmark",
-    },
-    "2. Desk Snapshot": {
-        "focus": "Conclusion + top names",
-    },
-    "3. Core Charts": {
-        "focus": "Visual evidence",
-    },
-    "4. CUSIP Drilldown": {
-        "focus": "Security evidence",
-    },
-    "5. RV / Watchlist": {
-        "focus": "Rank + save",
-    },
-    FULL_DASHBOARD_LABEL: {
-        "focus": "Advanced audit + historical modules",
-    },
-    "7. Export / Methodology": {
-        "focus": "Review + export",
-    },
-}
-
-
-def _workflow_guidance_html(active_label: str, files_loaded: int, issuers_loaded: int) -> str:
-    current = WORKFLOW_GUIDANCE.get(active_label, WORKFLOW_GUIDANCE["1. Upload / Data Audit"])
-    try:
-        idx = WORKFLOW_LABELS.index(active_label)
-        next_label = WORKFLOW_LABELS[idx + 1] if idx + 1 < len(WORKFLOW_LABELS) else "Analyst review / delivery"
-    except ValueError:
-        next_label = "Upload / Data Audit"
-    data_status = (
-        f"{files_loaded:,} files / {issuers_loaded:,} issuers"
-        if files_loaded
-        else "No file"
-    )
-    return f"""
-<div class='focus-band'>
-  <b>Focus:</b> {current['focus']} &nbsp; | &nbsp; <b>Status:</b> {data_status} &nbsp; | &nbsp; <b>Next:</b> {next_label}
-</div>
-"""
-
-
-def render_workflow_header(active_label: str, files_loaded: int = 0, issuers_loaded: int = 0):
-    """Render the workstation flow as a compact visual map."""
-    html_parts = ["<div class='workflow-grid'>"]
-    for idx, step in enumerate(WORKFLOW_STEPS, start=1):
-        active_class = " workflow-step-active" if step["label"] == active_label else ""
-        if idx == 1 and files_loaded:
-            note = f"{files_loaded:,} file(s); {issuers_loaded:,} issuer(s)."
-        elif idx == 2 and issuers_loaded:
-            note = "Ready after issuer selection."
-        else:
-            note = step["note"]
-        html_parts.append(
-            f"""
-<div class='workflow-step{active_class}'>
-  <div class='workflow-step-num'>{idx:02d}</div>
-  <div class='workflow-step-title'>{step['title']}</div>
-  <div class='workflow-step-note'>{note}</div>
-</div>
-"""
-        )
-    html_parts.append("</div>")
-    st.markdown("".join(html_parts), unsafe_allow_html=True)
-    st.markdown(_workflow_guidance_html(active_label, files_loaded, issuers_loaded), unsafe_allow_html=True)
-
-
 def render_advanced_audit_gateway(
     files_loaded: int,
     issuers_loaded: int,
@@ -1783,112 +1720,6 @@ If trade-sheet Index / Index Rate is available, the app uses that trade-implied 
 # Focused snapshot renderer lives in ui/snapshot.py.
 
 
-# Focused core chart and CUSIP/RV workflow renderers live in ui/charts.py and ui/cusip_detail.py.
-
-
-def render_focused_workflow(
-    workflow_view: str,
-    trade_reports: list[dict],
-    bond_report: dict | None,
-    mmd_report: dict | None,
-    market_df: pd.DataFrame,
-    bonds_df: pd.DataFrame,
-    issuer_master: pd.DataFrame,
-    mmd_df: pd.DataFrame,
-    trade_payloads: list[tuple[str, bytes]],
-    failed_files: list[str],
-    duplicates_removed: int,
-    uploaded_issuers: list[str],
-    selected_issuer: str,
-    selected_sector: str,
-    issuer_trades: pd.DataFrame,
-    issuer_bonds: pd.DataFrame,
-    comparison_issuers: list[str],
-    benchmark_source_mode: str,
-    benchmark_priority: str,
-    benchmark_conflict_policy: str,
-    use_external_mmd_fallback: bool,
-    mmd_file_provided: bool,
-):
-    render_workflow_header(workflow_view, files_loaded=len(trade_payloads), issuers_loaded=len(uploaded_issuers))
-    if workflow_view == "1. Upload / Data Audit":
-        render_focused_upload_audit(
-            trade_reports, bond_report, mmd_report, market_df, bonds_df, issuer_master, mmd_df,
-            trade_payloads, failed_files, duplicates_removed, benchmark_source_mode, benchmark_priority,
-            benchmark_conflict_policy, use_external_mmd_fallback, mmd_file_provided,
-            render_benchmark_methodology_block=_render_benchmark_methodology_block,
-        )
-    elif workflow_view == "2. Desk Snapshot":
-        render_focused_snapshot(market_df, bonds_df, issuer_trades, issuer_bonds, mmd_df, selected_issuer, selected_sector, benchmark_source_mode)
-    elif workflow_view == "3. Core Charts":
-        render_focused_core_charts(market_df, issuer_trades, mmd_df, selected_issuer, comparison_issuers, selected_sector)
-    elif workflow_view == "4. CUSIP Drilldown":
-        render_focused_cusip_drilldown(issuer_trades, selected_issuer)
-    elif workflow_view == "5. RV / Watchlist":
-        render_focused_rv_watchlist(issuer_trades, selected_issuer)
-    elif workflow_view == "7. Export / Methodology":
-        render_focused_export_methodology(
-            selected_issuer, selected_sector, market_df, issuer_trades, issuer_bonds, mmd_df,
-            benchmark_source_mode, benchmark_priority, benchmark_conflict_policy,
-            build_report_context=_build_focused_report_context,
-            section_anchor=section_anchor,
-            clean_metric_card=clean_metric_card,
-            safe_dataframe=safe_dataframe,
-            render_benchmark_methodology_block=_render_benchmark_methodology_block,
-        )
-
-
-def section_directory():
-    """Compact workflow map for the main page.
-
-    The full jump list lives in the sidebar. This main-page version is intentionally
-    concise so it does not crowd the dashboard before users upload data.
-    """
-    with st.expander("Dashboard workflow map", expanded=False):
-        st.markdown(
-            """
-<div class="nav-card">
-<b>How to read this dashboard</b><br><br>
-
-<b>1. Data readiness</b><br>
-<a href="#file-readiness">File Readiness</a> ·
-<a href="#executive-snapshot">Executive Snapshot</a><br><br>
-
-<b>2. Benchmark & spread framework</b><br>
-<a href="#yield-relative-value">Yield / RV Trend</a> ·
-<a href="#issuer-curve">Issuer Curve</a> ·
-<a href="#spread-level">Spread Level</a> ·
-<a href="#spread-attribution">Spread Attribution</a><br><br>
-
-<b>3. Relative value signals</b><br>
-<a href="#peer-rv">Peer RV</a> ·
-<a href="#cross-issuer-rv">Cross-Issuer RV</a> ·
-<a href="#historical-spread">Historical Percentile</a> ·
-<a href="#recommendation-engine">Rule-Based Narrative</a> ·
-<a href="#ai-commentary-studio">AI Commentary Studio</a><br><br>
-
-<b>4. Risk, flow & opportunity screening</b><br>
-<a href="#curve-shape">Curve Shape</a> ·
-<a href="#scenario-shock">Scenario Shock</a> ·
-<a href="#dealer-proxy">Dealer Proxy</a> ·
-<a href="#security-screener">Security Screener</a> ·
-<a href="#watchlist">Watchlist</a><br><br>
-
-<b>5. Outputs, methodology & raw detail</b><br>
-<a href="#spread-movement">Spread Movement</a> ·
-<a href="#cusip-drilldown">CUSIP Drilldown</a> ·
-<a href="#admin-methodology">Admin Methodology</a> ·
-<a href="#version-changelog">Version / Change Log</a> ·
-<a href="#workflow-export-methodology">Export / Methodology</a> ·
-<a href="#downloads">Downloads</a>
-</div>
-""",
-            unsafe_allow_html=True,
-        )
-
-# Dashboard workflow map removed: the app now uses a desk-first sidebar index.
-
-
 with st.expander("Instructions", expanded=False):
     st.markdown(
         """
@@ -1977,6 +1808,31 @@ def dataframe_download_button(df: pd.DataFrame, label: str, filename: str):
     st.download_button(label=label, data=csv, file_name=filename, mime="text/csv")
 
 
+def filtered_data_bundle_bytes(tables: dict[str, pd.DataFrame]) -> bytes:
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, df in tables.items():
+            safe_name = re.sub(r"[^A-Za-z0-9_\\-]+", "_", name).strip("_").lower() or "table"
+            out = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+            zf.writestr(f"{safe_name}.csv", out.to_csv(index=False))
+    return buffer.getvalue()
+
+
+def filtered_excel_workbook_bytes(tables: dict[str, pd.DataFrame]) -> tuple[bytes | None, str | None]:
+    buffer = io.BytesIO()
+    try:
+        with pd.ExcelWriter(buffer) as writer:
+            for name, df in tables.items():
+                sheet_name = re.sub(r"[^A-Za-z0-9 _-]+", "", name).strip()[:31] or "Sheet"
+                out = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+                out.to_excel(writer, sheet_name=sheet_name, index=False)
+        return buffer.getvalue(), None
+    except Exception as exc:
+        return None, str(exc)
+
+
 with st.sidebar:
     st.markdown(
         """
@@ -1987,7 +1843,6 @@ with st.sidebar:
 """,
         unsafe_allow_html=True,
     )
-    workflow_view = "Trading Workbench"
     sidebar_status_card("Mode", "Trading Workbench", "Controls live in the main page.")
     with st.expander("System", expanded=False):
         PERFORMANCE_MODE = st.checkbox(
@@ -2245,7 +2100,6 @@ workbench_state = render_trading_workbench(
     issuer_master=issuer_master,
     benchmark_source_mode=benchmark_source_mode,
 )
-workflow_view = FULL_DASHBOARD_LABEL
 
 workbench_selection = workbench_state.get("selection") if isinstance(workbench_state, dict) else None
 workbench_filtered_universe = workbench_state.get("filtered_universe_df") if isinstance(workbench_state, dict) else None
@@ -2406,8 +2260,33 @@ if issuer_sector_overrides and "issuer" in market_df.columns:
         if "issuer" in issuer_master.columns:
             issuer_master.loc[issuer_master["issuer"] == _issuer_name, "sector"] = _sector_value
 
+filtered_issuer_master = issuer_master.copy()
+filtered_bonds_df = bonds_df.copy()
+active_filter_issuers = set(uploaded_issuers)
+active_filter_cusips = set()
+if isinstance(market_df, pd.DataFrame) and "cusip" in market_df.columns:
+    active_filter_cusips = set(market_df["cusip"].dropna().astype(str))
+
+if active_filter_issuers and "issuer" in filtered_issuer_master.columns:
+    filtered_issuer_master = filtered_issuer_master[
+        filtered_issuer_master["issuer"].astype(str).isin(active_filter_issuers)
+    ].copy()
+
+if active_filter_issuers and "issuer" in filtered_bonds_df.columns:
+    filtered_bonds_df = filtered_bonds_df[
+        filtered_bonds_df["issuer"].astype(str).isin(active_filter_issuers)
+    ].copy()
+if active_filter_cusips and "cusip" in filtered_bonds_df.columns:
+    filtered_bonds_df = filtered_bonds_df[
+        filtered_bonds_df["cusip"].dropna().astype(str).isin(active_filter_cusips)
+    ].copy()
+
 issuer_trades = market_df[market_df["issuer"] == selected_issuer].copy()
-issuer_bonds = bonds_df[bonds_df["issuer"] == selected_issuer].copy()
+issuer_bonds = (
+    filtered_bonds_df[filtered_bonds_df["issuer"] == selected_issuer].copy()
+    if "issuer" in filtered_bonds_df.columns
+    else pd.DataFrame()
+)
 if not issuer_trades.empty and not issuer_bonds.empty and {"cusip"}.issubset(issuer_trades.columns) and {"cusip"}.issubset(issuer_bonds.columns):
     filtered_cusips = set(issuer_trades["cusip"].dropna().astype(str))
     if filtered_cusips:
@@ -2462,33 +2341,6 @@ if not issuer_trades.empty and trade_date_filter_enabled and selected_trade_date
             (pd.to_datetime(issuer_trades["trade_date"], errors="coerce").dt.date >= _start_date)
             & (pd.to_datetime(issuer_trades["trade_date"], errors="coerce").dt.date <= _end_date)
         ].copy()
-
-if workflow_view != FULL_DASHBOARD_LABEL:
-    render_focused_workflow(
-        workflow_view=workflow_view,
-        trade_reports=trade_reports,
-        bond_report=bond_report,
-        mmd_report=mmd_report,
-        market_df=market_df,
-        bonds_df=bonds_df,
-        issuer_master=issuer_master,
-        mmd_df=mmd_df,
-        trade_payloads=trade_payloads,
-        failed_files=failed_files,
-        duplicates_removed=duplicates_removed,
-        uploaded_issuers=uploaded_issuers,
-        selected_issuer=selected_issuer,
-        selected_sector=selected_sector,
-        issuer_trades=issuer_trades,
-        issuer_bonds=issuer_bonds,
-        comparison_issuers=comparison_issuers_sidebar,
-        benchmark_source_mode=benchmark_source_mode,
-        benchmark_priority=benchmark_priority,
-        benchmark_conflict_policy=benchmark_conflict_policy,
-        use_external_mmd_fallback=use_external_mmd_fallback,
-        mmd_file_provided=mmd_payload is not None,
-    )
-    st.stop()
 
 render_advanced_audit_gateway(
     files_loaded=len(trade_payloads),
@@ -3043,8 +2895,7 @@ else:
                     if c in curve_table.columns:
                         curve_table[c] = pd.to_numeric(curve_table[c], errors="coerce").round(2)
 
-                st.subheader("Curve Spread Table")
-                safe_dataframe(curve_table, width="stretch", hide_index=True)
+                collapsed_dataframe("Curve spread evidence table", curve_table, width="stretch", hide_index=True)
 
                 primary_curve_rating = curve_benchmark_ratings[0]
                 primary_rows = issuer_curve_audit[issuer_curve_audit["benchmark_rating"] == primary_curve_rating].copy()
@@ -3410,14 +3261,19 @@ This is useful because trade count alone can overstate liquidity when most activ
     safe_plotly_chart(px.histogram(liq, x="days_since_last_trade", nbins=30, color="liquidity_tier", title="Distribution of Days Since Last Trade"), width="stretch")
     render_liquidity_readthrough(liq)
 
-    st.subheader("5. Liquidity Ranking Table")
+    st.subheader("5. Liquidity Ranking")
     display_cols = [
         "cusip", "liquidity_tier", "liquidity_score", "trade_count", "recent_90d_trades", "active_months",
         "avg_trades_per_month", "avg_days_between_trades", "days_since_last_trade", "first_trade", "latest_trade",
         "avg_yield", "yield_range", "avg_price", "total_trade_amount", "avg_trade_amount", "turnover_ratio",
         "maturity", "coupon", "outstanding_amount",
     ]
-    safe_dataframe(liq[[c for c in display_cols if c in liq.columns]], width="stretch", height=500)
+    collapsed_dataframe(
+        "Liquidity ranking evidence table",
+        liq[[c for c in display_cols if c in liq.columns]],
+        width="stretch",
+        height=500,
+    )
 
 section_anchor("cusip-drilldown", "CUSIP Opportunity Drilldown")
 with st.expander("Methodology: CUSIP opportunity drilldown", expanded=False):
@@ -3673,8 +3529,13 @@ else:
                                     if col in dd_display.columns:
                                         dd_display[col] = pd.to_numeric(dd_display[col], errors="coerce").round(2)
 
-                                st.subheader("CUSIP Opportunity Table")
-                                safe_dataframe(dd_display, width="stretch", hide_index=True, height=420)
+                                collapsed_dataframe(
+                                    "CUSIP opportunity evidence table",
+                                    dd_display,
+                                    width="stretch",
+                                    hide_index=True,
+                                    height=420,
+                                )
 
                                 st.subheader("Security Detail")
                                 selected_cusip = st.selectbox(
@@ -4017,17 +3878,22 @@ else:
                             if c in display_candidates.columns:
                                 display_candidates[c] = pd.to_numeric(display_candidates[c], errors="coerce").round(2)
 
-                        st.caption("Showing top 15 candidates. Expand for a larger preview.")
-                        safe_dataframe(
+                        collapsed_dataframe(
+                            "Top screener candidate table",
                             display_candidates.head(15),
                             width="stretch",
                             hide_index=True,
                             height=420,
-                            auto_collapse=False,
                         )
                         if len(display_candidates) > 15:
-                            with st.expander(f"View broader candidate table ({len(display_candidates):,} rows)", expanded=False):
-                                safe_dataframe(display_candidates, width="stretch", hide_index=True, height=480, max_rows=1000, auto_collapse=False)
+                            collapsed_dataframe(
+                                "Broader screener candidate table",
+                                display_candidates,
+                                width="stretch",
+                                hide_index=True,
+                                height=480,
+                                max_rows=1000,
+                            )
 
                         # Desk-friendly replacement for the old bubble scatter:
                         # show the clearest Top-N ranked opportunities first.
@@ -4069,7 +3935,13 @@ else:
                         for c in ["spread_to_benchmark_bps", "liquidity_score", "rv_score"]:
                             if c in q_display.columns:
                                 q_display[c] = pd.to_numeric(q_display[c], errors="coerce").round(2)
-                        safe_dataframe(q_display, width="stretch", hide_index=True, auto_collapse=False, height=420)
+                        collapsed_dataframe(
+                            "Opportunity read-through table",
+                            q_display,
+                            width="stretch",
+                            hide_index=True,
+                            height=420,
+                        )
 
                     with st.expander("Screener universe audit table", expanded=False):
                         audit_cols = [
@@ -4817,24 +4689,22 @@ else:
                                             ranking_display[c] = pd.to_numeric(ranking_display[c], errors="coerce").round(2)
 
                                     ranking_display_top = ranking_display.head(15).copy()
-                                    st.caption("Showing top 15 cross-issuer RV candidates. Expand the table for a larger preview.")
-                                    safe_dataframe(
+                                    collapsed_dataframe(
+                                        "Top cross-issuer RV candidates",
                                         ranking_display_top,
                                         width="stretch",
                                         hide_index=True,
                                         height=430,
-                                        auto_collapse=False,
                                     )
                                     if len(ranking_display) > len(ranking_display_top):
-                                        with st.expander(f"View broader Cross-Issuer RV Ranking ({len(ranking_display):,} rows)", expanded=False):
-                                            safe_dataframe(
-                                                ranking_display,
-                                                width="stretch",
-                                                hide_index=True,
-                                                height=430,
-                                                max_rows=min(MAX_TABLE_ROWS, 1000),
-                                                auto_collapse=False,
-                                            )
+                                        collapsed_dataframe(
+                                            "Broader cross-issuer RV ranking",
+                                            ranking_display,
+                                            width="stretch",
+                                            hide_index=True,
+                                            height=430,
+                                            max_rows=min(MAX_TABLE_ROWS, 1000),
+                                        )
 
                                     st.subheader("3. Cross-Issuer Opportunity Ranking")
                                     # Bubble maps become unreadable with many issuer/maturity combinations.
@@ -4865,7 +4735,13 @@ else:
                                     for c in ["peer_gap_bps", "spread_to_benchmark_bps", "bucket_peer_median_bps", "liquidity_score", "x_issuer_rv_score"]:
                                         if c in decision_display.columns:
                                             decision_display[c] = pd.to_numeric(decision_display[c], errors="coerce").round(2)
-                                    safe_dataframe(decision_display, width="stretch", hide_index=True, auto_collapse=False, height=460)
+                                    collapsed_dataframe(
+                                        "Cross-issuer decision table",
+                                        decision_display,
+                                        width="stretch",
+                                        hide_index=True,
+                                        height=460,
+                                    )
 
                                     if not ranking.empty:
                                         top = ranking.iloc[0]
@@ -6858,7 +6734,13 @@ else:
                     read_cols = ["desk_signal", "security_label", "maturity_bucket", rv_y_axis_col, "liquidity_score", "trade_count", "total_trade_amount"]
                     read_display = rv_read[[c for c in read_cols if c in rv_read.columns]].sort_values(rv_y_axis_col, ascending=False).head(15)
                     st.subheader("Positioning Read-Through")
-                    safe_dataframe(read_display, width="stretch", hide_index=True, auto_collapse=False, height=400)
+                    collapsed_dataframe(
+                        "Positioning read-through table",
+                        read_display,
+                        width="stretch",
+                        hide_index=True,
+                        height=400,
+                    )
                 except Exception as exc:
                     st.warning(
                         "The positioning map could not be plotted because the scatter inputs were not usable. "
@@ -7264,78 +7146,111 @@ A trading workflow often moves from screening → shortlist → detailed review.
 **Current implementation:**
 
 - Uses Streamlit session state, so it persists while the app session is active.
-- Users can add CUSIPs from the selected issuer or all uploaded data.
-- Users can download the watchlist as CSV.
+- The same saved candidate list is used by CUSIP Drilldown, RV / Watchlist, Advanced Analysis, and Export.
+- Users can add CUSIPs from the active filter scope and download the watchlist as CSV or Markdown.
 - This is not a database-backed permanent watchlist yet; that would be a future production feature.
         """
     )
 
-if "watchlist_cusips" not in st.session_state:
-    st.session_state["watchlist_cusips"] = []
+watch_summary = _focused_summary_with_peer_gaps(_build_workflow_cusip_summary(market_df))
+watch_universe = market_df.copy()
+watch_options = sorted(watch_universe["cusip"].dropna().astype(str).unique().tolist()) if "cusip" in watch_universe.columns else []
+cusip_issuer_map = (
+    watch_universe.dropna(subset=["cusip"]).drop_duplicates("cusip").set_index("cusip")["issuer"].astype(str).to_dict()
+    if {"cusip", "issuer"}.issubset(watch_universe.columns)
+    else {}
+)
 
-watch_col1, watch_col2 = st.columns([1, 1])
+watch_col1, watch_col2, watch_col3 = st.columns([1.2, 1.4, 1])
 with watch_col1:
-    watch_scope = st.selectbox(
-        "Watchlist Add Scope",
-        ["Selected issuer", "All uploaded issuers"],
-        index=0,
-        key="watchlist_scope",
-    )
-with watch_col2:
-    watch_universe = market_df.copy()
-    if watch_scope == "Selected issuer":
-        watch_universe = watch_universe[watch_universe["issuer"] == selected_issuer].copy()
-    watch_options = sorted(watch_universe["cusip"].dropna().astype(str).unique().tolist()) if "cusip" in watch_universe.columns else []
     cusips_to_add = st.multiselect(
-        "Add CUSIPs to Watchlist",
+        "Add CUSIPs from active filter",
         watch_options,
         default=[],
-        key="watchlist_add_cusips",
+        key="watchlist_add_focused_cusips",
+    )
+with watch_col2:
+    watch_note = st.text_input(
+        "Candidate note",
+        key="watchlist_add_focused_note",
+        placeholder="Why this belongs on the desk shortlist.",
+    )
+with watch_col3:
+    watch_status = st.selectbox(
+        "Status",
+        ["Review", "High priority", "Needs data check", "Pass / monitor"],
+        key="watchlist_add_focused_status",
+    )
+    watch_next_step = st.text_input(
+        "Next step",
+        key="watchlist_add_focused_next_step",
+        placeholder="Verify / call / monitor",
     )
 
 add_col, clear_col = st.columns([1, 1])
 with add_col:
-    if st.button("Add selected CUSIPs", key="add_watchlist_cusips"):
-        current = set(st.session_state.get("watchlist_cusips", []))
-        current.update(cusips_to_add)
-        st.session_state["watchlist_cusips"] = sorted(current)
+    if st.button("Add selected CUSIPs", key="add_focused_watchlist_cusips"):
+        for cusip in cusips_to_add:
+            row_match = watch_summary[watch_summary["cusip"].astype(str) == str(cusip)] if not watch_summary.empty else pd.DataFrame()
+            row = row_match.iloc[0] if not row_match.empty else {"cusip": cusip}
+            row_issuer = cusip_issuer_map.get(str(cusip), selected_issuer)
+            _upsert_focused_watchlist(
+                cusip,
+                row_issuer,
+                "Advanced Watchlist",
+                row,
+                watch_note,
+                status=watch_status,
+                reason=str(row.get("signal", "")),
+                next_step=watch_next_step,
+            )
         st.success(f"Added {len(cusips_to_add):,} CUSIP(s) to watchlist.")
 with clear_col:
-    if st.button("Clear watchlist", key="clear_watchlist_cusips"):
-        st.session_state["watchlist_cusips"] = []
+    if st.button("Clear watchlist", key="clear_focused_watchlist_cusips"):
+        st.session_state["focused_watchlist_records"] = {}
+        st.session_state["focused_watchlist"] = []
         st.info("Watchlist cleared.")
 
-watchlist_cusips = st.session_state.get("watchlist_cusips", [])
-if not watchlist_cusips:
-    st.info("No CUSIPs saved yet. Add candidates from the selector above.")
+saved_watchlist = _focused_watchlist_dataframe(watch_summary)
+if saved_watchlist.empty:
+    st.info("No CUSIPs saved yet. Add candidates from CUSIP Drilldown, RV / Watchlist, or the selector above.")
 else:
-    watchlist_df = market_df[market_df["cusip"].astype(str).isin(watchlist_cusips)].copy()
-    if watchlist_df.empty:
-        st.warning("Saved CUSIPs were not found in the current uploaded dataset.")
-    else:
-        watchlist_df["trade_date"] = pd.to_datetime(watchlist_df["trade_date"], errors="coerce")
-        if "trade_amount" in watchlist_df.columns:
-            watchlist_df["trade_amount"] = pd.to_numeric(watchlist_df["trade_amount"], errors="coerce").fillna(0)
-        else:
-            watchlist_df["trade_amount"] = 0.0
-        watchlist_summary = (
-            watchlist_df.groupby("cusip", dropna=False)
-            .agg(
-                issuer=("issuer", "first"),
-                sector=("sector", "first") if "sector" in watchlist_df.columns else ("issuer", "first"),
-                maturity_bucket=("maturity_bucket", "first") if "maturity_bucket" in watchlist_df.columns else ("issuer", "first"),
-                maturity=("maturity_bond", "first") if "maturity_bond" in watchlist_df.columns else ("trade_date", "max"),
-                coupon=("coupon_bond", "first") if "coupon_bond" in watchlist_df.columns else ("trade_date", "count"),
-                avg_yield=("yield", "mean"),
-                avg_price=("price", "mean") if "price" in watchlist_df.columns else ("yield", "mean"),
-                trade_count=("trade_date", "count"),
-                total_trade_amount=("trade_amount", "sum"),
-                latest_trade=("trade_date", "max"),
-            )
-            .reset_index()
+    w1, w2, w3 = st.columns(3)
+    with w1:
+        clean_metric_card("Saved CUSIPs", f"{len(saved_watchlist):,}", size="small")
+    with w2:
+        high_priority_count = int((saved_watchlist.get("status", pd.Series(dtype=str)).astype(str) == "High priority").sum())
+        clean_metric_card("High Priority", f"{high_priority_count:,}", size="small")
+    with w3:
+        data_check_count = int((saved_watchlist.get("status", pd.Series(dtype=str)).astype(str) == "Needs data check").sum())
+        clean_metric_card("Needs Data Check", f"{data_check_count:,}", size="small")
+    watch_cols = [
+        "cusip", "issuer", "status", "reason", "next_step", "signal", "maturity_bucket",
+        "current_spread_bps", "peer_median_gap_bps", "liquidity_score", "rv_score",
+        "trade_count", "total_trade_amount", "latest_trade", "note", "source", "updated_at",
+    ]
+    collapsed_dataframe(
+        "Saved candidate table",
+        saved_watchlist[[c for c in watch_cols if c in saved_watchlist.columns]],
+        width="stretch",
+        hide_index=True,
+    )
+    export_col1, export_col2 = st.columns([1, 1])
+    with export_col1:
+        st.download_button(
+            "Download Watchlist CSV",
+            data=saved_watchlist.to_csv(index=False).encode("utf-8"),
+            file_name=f"{selected_issuer}_watchlist.csv".replace(" ", "_"),
+            mime="text/csv",
         )
-        st.metric("Saved CUSIPs", f"{len(watchlist_summary):,}")
-        safe_dataframe(watchlist_summary, width="stretch", hide_index=True)
+    with export_col2:
+        watch_md = _focused_watchlist_markdown(saved_watchlist, selected_issuer)
+        st.download_button(
+            "Download Watchlist Markdown",
+            data=watch_md.encode("utf-8"),
+            file_name=f"{selected_issuer}_watchlist.md".replace(" ", "_"),
+            mime="text/markdown",
+        )
 
 
 section_anchor("recommendation-engine", "Trade Recommendation Narrative Engine")
@@ -8628,13 +8543,12 @@ st.caption("Update this changelog whenever the team changes methodology, assumpt
 
 if show_raw_tables:
     st.header("Raw / Processed Tables")
-    st.subheader("Issuer Master")
-    safe_dataframe(issuer_master, width="stretch")
-    st.subheader("Security Reference")
-    safe_dataframe(bonds_df, width="stretch")
-    st.subheader("All Trades")
-    safe_dataframe(trades_df.head(20000), width="stretch")
-    st.subheader("Merged Market Data")
+    st.caption("These tables use the same active Trading Filter scope as the charts and final export.")
+    st.subheader("Filtered Issuer Master")
+    safe_dataframe(filtered_issuer_master, width="stretch")
+    st.subheader("Filtered Security Reference")
+    safe_dataframe(filtered_bonds_df, width="stretch")
+    st.subheader("Filtered Market Data")
     safe_dataframe(market_df.head(20000), width="stretch")
 
 st.markdown("---")
@@ -8656,10 +8570,45 @@ render_focused_export_methodology(
 )
 
 section_anchor("downloads", "Download Outputs")
-d1, d2, d3 = st.columns(3)
+download_tables = {
+    "filtered_market_data": market_df,
+    "filtered_issuer_master": filtered_issuer_master,
+    "filtered_security_reference": filtered_bonds_df,
+    "selected_issuer_trades": issuer_trades,
+    "selected_issuer_security_reference": issuer_bonds,
+    "saved_watchlist": _focused_watchlist_dataframe(_focused_summary_with_peer_gaps(_build_workflow_cusip_summary(market_df))),
+}
+d1, d2, d3, d4 = st.columns(4)
 with d1:
     dataframe_download_button(market_df, "Download Filtered Market Data CSV", "filtered_market_data.csv")
 with d2:
-    dataframe_download_button(issuer_master, "Download Issuer Master CSV", "issuer_master.csv")
+    dataframe_download_button(filtered_issuer_master, "Download Filtered Issuer Master CSV", "filtered_issuer_master.csv")
 with d3:
-    dataframe_download_button(issuer_bonds, "Download Filtered Security Reference CSV", "filtered_security_reference.csv")
+    dataframe_download_button(filtered_bonds_df, "Download Filtered Security Reference CSV", "filtered_security_reference.csv")
+with d4:
+    prepare_bulk_exports = st.checkbox(
+        "Prepare ZIP / Excel",
+        value=False,
+        help="Bulk exports can be heavy for large files, so they are generated only when requested.",
+    )
+
+if prepare_bulk_exports:
+    bulk_col1, bulk_col2 = st.columns(2)
+    with bulk_col1:
+        st.download_button(
+            "Download Filtered Data Bundle",
+            data=filtered_data_bundle_bytes(download_tables),
+            file_name="filtered_secondary_market_data_bundle.zip",
+            mime="application/zip",
+        )
+    with bulk_col2:
+        excel_bytes, excel_error = filtered_excel_workbook_bytes(download_tables)
+        if excel_bytes:
+            st.download_button(
+                "Download Excel Workbook",
+                data=excel_bytes,
+                file_name="filtered_secondary_market_workbook.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.info(f"Excel workbook export is unavailable in this environment: {excel_error}")

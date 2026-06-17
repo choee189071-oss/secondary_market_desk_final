@@ -16,6 +16,7 @@ from ui.common import (
     safe_dataframe,
     section_anchor,
 )
+from ui.methodology import render_methodology_trust_panel
 
 
 def _status_label(status: str) -> str:
@@ -328,20 +329,18 @@ def render_focused_upload_audit(
         st.subheader("Data Coverage")
         safe_dataframe(pd.DataFrame(coverage_rows), width="stretch", hide_index=True, auto_collapse=False)
 
-        st.subheader("Benchmark Priority / MMD Logic")
-        mmd_logic_rows = [
-            {"Policy Item": "Uploaded MMD role", "Current Setting": "AAA benchmark curve when external MMD fallback is active"},
-            {"Policy Item": "Benchmark priority", "Current Setting": "Trade Sheet Index / Index Rate first; uploaded MMD fallback second"},
-            {"Policy Item": "External MMD fallback toggle", "Current Setting": "Enabled" if use_external_mmd_fallback else "Disabled"},
-            {"Policy Item": "MMD file provided", "Current Setting": "Yes" if mmd_file_provided else "No"},
-            {"Policy Item": "Active benchmark source", "Current Setting": benchmark_source_mode},
-            {"Policy Item": "Mixing policy", "Current Setting": "Never mix trade-sheet index rates and uploaded MMD in the same run"},
-        ]
-        safe_dataframe(pd.DataFrame(mmd_logic_rows), width="stretch", hide_index=True, auto_collapse=False)
-
-        st.subheader("Fixed Benchmark / Methodology Audit")
-        if render_benchmark_methodology_block is not None:
-            render_benchmark_methodology_block(mmd_df, benchmark_source_mode, benchmark_priority, benchmark_conflict_policy)
+        st.subheader("Unified Methodology / Evidence")
+        render_methodology_trust_panel(
+            market_df=market_df,
+            issuer_df=market_df,
+            mmd_df=mmd_df,
+            benchmark_source_mode=benchmark_source_mode,
+            benchmark_priority=benchmark_priority,
+            benchmark_conflict_policy=benchmark_conflict_policy,
+            title="Audit Evidence / Benchmark Methodology",
+            expanded=False,
+            render_benchmark_methodology_block=render_benchmark_methodology_block,
+        )
 
 
 def display_validation_report(title: str, report: dict, warnings: list[str] | None = None):

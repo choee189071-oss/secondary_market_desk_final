@@ -34,23 +34,44 @@ def _focused_watchlist_records() -> dict:
                 "cusip": str(cusip),
                 "issuer": "",
                 "signal": "",
+                "status": "Review",
+                "reason": "",
+                "next_step": "",
                 "note": "",
                 "source": "Migrated",
                 "added_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
             }
         st.session_state["focused_watchlist_records"] = records
-    return st.session_state["focused_watchlist_records"]
+    records = st.session_state["focused_watchlist_records"]
+    for record in records.values():
+        record.setdefault("status", "Review")
+        record.setdefault("reason", "")
+        record.setdefault("next_step", "")
+    return records
 
 
-def _upsert_focused_watchlist(cusip: object, issuer: str, source: str, row: pd.Series | dict | None = None, note: str = ""):
+def _upsert_focused_watchlist(
+    cusip: object,
+    issuer: str,
+    source: str,
+    row: pd.Series | dict | None = None,
+    note: str = "",
+    status: str = "Review",
+    reason: str = "",
+    next_step: str = "",
+):
     records = _focused_watchlist_records()
     key = str(cusip)
     existing = records.get(key, {})
     row_dict = row.to_dict() if isinstance(row, pd.Series) else (row or {})
+    default_reason = reason or row_dict.get("signal", existing.get("reason", ""))
     records[key] = {
         "cusip": key,
         "issuer": issuer or existing.get("issuer", ""),
         "signal": row_dict.get("signal", existing.get("signal", "")),
+        "status": status or existing.get("status", "Review"),
+        "reason": default_reason,
+        "next_step": next_step if next_step else existing.get("next_step", ""),
         "maturity_bucket": row_dict.get("maturity_bucket", existing.get("maturity_bucket", "")),
         "current_spread_bps": row_dict.get("current_spread_bps", existing.get("current_spread_bps", pd.NA)),
         "peer_median_gap_bps": row_dict.get("peer_median_gap_bps", existing.get("peer_median_gap_bps", pd.NA)),
@@ -106,6 +127,9 @@ def _focused_watchlist_markdown(saved_df: pd.DataFrame, issuer: str) -> str:
             [
                 f"## {row.get('cusip', 'N/A')}",
                 f"- Signal: {row.get('signal', 'N/A')}",
+                f"- Status: {row.get('status', 'Review')}",
+                f"- Reason: {row.get('reason', '') or 'N/A'}",
+                f"- Next step: {row.get('next_step', '') or 'N/A'}",
                 f"- Maturity bucket: {row.get('maturity_bucket', 'N/A')}",
                 f"- Spread: {_fmt_bps(row.get('current_spread_bps'))}",
                 f"- Peer median gap: {_fmt_bps(row.get('peer_median_gap_bps'))}",
@@ -217,8 +241,13 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
         st.markdown(f"- {line}")
 
     records = _focused_watchlist_records()
-    existing_note = records.get(str(selected_cusip), {}).get("note", "")
-    note_col, action_col = st.columns([2.2, 1])
+    existing_record = records.get(str(selected_cusip), {})
+    existing_note = existing_record.get("note", "")
+    status_options = ["Review", "High priority", "Needs data check", "Pass / monitor"]
+    current_status = existing_record.get("status", "Review")
+    if current_status not in status_options:
+        current_status = "Review"
+    note_col, status_col, action_col = st.columns([2.1, 1, 1])
     with note_col:
         watch_note = st.text_area(
             "Watchlist note",
@@ -227,10 +256,32 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
             height=86,
             placeholder="Why this CUSIP is worth saving, what to verify, or how to frame it in the report.",
         )
+    with status_col:
+        watch_status = st.selectbox(
+            "Status",
+            status_options,
+            index=status_options.index(current_status),
+            key=f"cusip_watch_status_{selected_cusip}",
+        )
+        watch_next_step = st.text_input(
+            "Next step",
+            value=existing_record.get("next_step", ""),
+            key=f"cusip_watch_next_step_{selected_cusip}",
+            placeholder="Call / verify / monitor",
+        )
     with action_col:
         st.caption("Save for watchlist/export.")
         if st.button("Save / Update Watchlist", key=f"save_watch_{selected_cusip}"):
-            _upsert_focused_watchlist(selected_cusip, selected_issuer, "CUSIP Drilldown", selected_row, watch_note)
+            _upsert_focused_watchlist(
+                selected_cusip,
+                selected_issuer,
+                "CUSIP Drilldown",
+                selected_row,
+                watch_note,
+                status=watch_status,
+                reason=str(selected_row.get("signal", "")),
+                next_step=watch_next_step,
+            )
             st.success(f"Saved {selected_cusip} to watchlist.")
 
     st.subheader("Trade Path")
@@ -502,7 +553,7 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
     st.subheader("Watchlist")
     _focused_watchlist_records()
     add_options = ranked["cusip"].dropna().astype(str).head(150).tolist() if not ranked.empty else []
-    add_col, note_col = st.columns([1.2, 2])
+    add_col, note_col, status_col = st.columns([1.1, 1.6, 1])
     with add_col:
         selected_add = st.multiselect("Add CUSIPs", add_options, key="focused_rv_add_cusips")
     with note_col:
@@ -511,13 +562,33 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
             key="focused_rv_bulk_note",
             placeholder="Why these belong on the shortlist, or what to verify next.",
         )
+    with status_col:
+        bulk_status = st.selectbox(
+            "Status",
+            ["Review", "High priority", "Needs data check", "Pass / monitor"],
+            key="focused_rv_bulk_status",
+        )
+        bulk_next_step = st.text_input(
+            "Next step",
+            key="focused_rv_bulk_next_step",
+            placeholder="Verify / call / monitor",
+        )
     add_button_col, clear_button_col = st.columns([1, 1])
     with add_button_col:
         if st.button("Add selected to watchlist", key="focused_rv_add_selected"):
             for item in selected_add:
                 row_match = ranked[ranked["cusip"].astype(str) == str(item)]
                 row = row_match.iloc[0] if not row_match.empty else {"cusip": item}
-                _upsert_focused_watchlist(item, selected_issuer, "RV Ranking", row, bulk_note)
+                _upsert_focused_watchlist(
+                    item,
+                    selected_issuer,
+                    "RV Ranking",
+                    row,
+                    bulk_note,
+                    status=bulk_status,
+                    reason=str(row.get("signal", "")),
+                    next_step=bulk_next_step,
+                )
             st.success(f"Saved {len(selected_add):,} selected CUSIP(s).")
     with clear_button_col:
         if st.button("Clear full watchlist", key="focused_rv_clear_watchlist"):
@@ -531,18 +602,35 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
     else:
         st.caption(f"{len(saved):,} saved.")
         saved_display_cols = [
-            "cusip", "issuer", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
+            "cusip", "issuer", "status", "reason", "next_step", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
             "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
             "note", "source", "updated_at",
         ]
         with st.expander("Saved candidate table", expanded=False):
             safe_dataframe(saved[[c for c in saved_display_cols if c in saved.columns]], hide_index=True, auto_collapse=False)
 
-        edit_col1, edit_col2 = st.columns([1, 2])
+        edit_col1, edit_col2, edit_col3 = st.columns([1, 1.3, 1.5])
         with edit_col1:
             saved_cusips = saved["cusip"].dropna().astype(str).tolist()
             edit_cusip = st.selectbox("Edit saved CUSIP", saved_cusips, key="focused_watch_edit_cusip")
         with edit_col2:
+            current_records = _focused_watchlist_records()
+            edit_status_options = ["Review", "High priority", "Needs data check", "Pass / monitor"]
+            current_status = current_records.get(str(edit_cusip), {}).get("status", "Review")
+            if current_status not in edit_status_options:
+                current_status = "Review"
+            edited_status = st.selectbox(
+                "Saved status",
+                edit_status_options,
+                index=edit_status_options.index(current_status),
+                key=f"focused_watch_edit_status_{edit_cusip}",
+            )
+            edited_next_step = st.text_input(
+                "Saved next step",
+                value=current_records.get(str(edit_cusip), {}).get("next_step", ""),
+                key=f"focused_watch_edit_next_{edit_cusip}",
+            )
+        with edit_col3:
             current_records = _focused_watchlist_records()
             current_note = current_records.get(str(edit_cusip), {}).get("note", "")
             edited_note = st.text_area(
@@ -557,6 +645,8 @@ def render_focused_rv_watchlist(issuer_trades: pd.DataFrame, selected_issuer: st
                 current_records = _focused_watchlist_records()
                 if str(edit_cusip) in current_records:
                     current_records[str(edit_cusip)]["note"] = edited_note
+                    current_records[str(edit_cusip)]["status"] = edited_status
+                    current_records[str(edit_cusip)]["next_step"] = edited_next_step
                     current_records[str(edit_cusip)]["updated_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
                     st.success(f"Updated note for {edit_cusip}.")
         with remove_col:

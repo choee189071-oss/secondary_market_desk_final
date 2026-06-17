@@ -20,6 +20,7 @@ from ui.common import (
     safe_dataframe,
     section_anchor,
 )
+from ui.methodology import render_methodology_trust_panel
 
 
 def _build_snapshot_methodology_cards(
@@ -301,6 +302,20 @@ def render_focused_snapshot(
 
     with st.expander("Methodology warning cards", expanded=bad_count > 0):
         _render_card_grid(warning_cards, "status-card-grid")
+
+    with st.expander("Evidence / audit summary", expanded=False):
+        render_methodology_trust_panel(
+            market_df=market_df,
+            issuer_df=issuer_base,
+            mmd_df=mmd_df,
+            benchmark_source_mode=benchmark_source_mode,
+            benchmark_priority="Primary" if benchmark_source_mode == "Trade Sheet Index / Index Rate" else "Fallback",
+            benchmark_conflict_policy="One benchmark source is used per run; trade-sheet Index Rate is not mixed with uploaded MMD.",
+            title="Detailed Evidence",
+            expanded=False,
+            show_cards=False,
+            show_trust_layers=False,
+        )
 
     with st.expander("Snapshot calculation notes", expanded=False):
         st.markdown(
