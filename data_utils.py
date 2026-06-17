@@ -218,9 +218,15 @@ def standardize_trades(df: pd.DataFrame, source_file: Optional[str] = None) -> p
     if df.columns.duplicated().any():
         df = df.T.groupby(level=0, sort=False).first().T
     if "ratings_m_s_f" not in df.columns and {"m", "s", "f"}.issubset(df.columns):
-        rating_parts = df[["m", "s", "f"]].astype(str).replace({"nan": "", "None": "", "<NA>": ""})
+        def _clean_rating_part(value: object) -> str:
+            if pd.isna(value):
+                return ""
+            text = str(value).strip()
+            return "" if text.lower() in {"", "nan", "none", "<na>"} else text
+
+        rating_parts = df[["m", "s", "f"]].apply(lambda col: col.map(_clean_rating_part))
         df["ratings_m_s_f"] = rating_parts.apply(
-            lambda row: "/".join([part for part in row.tolist() if part.strip()]),
+            lambda row: "/".join([part for part in row.tolist() if part]),
             axis=1,
         ).replace({"": pd.NA})
 
