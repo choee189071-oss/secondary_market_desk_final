@@ -7,7 +7,7 @@ Use this page when asking a professional analyst to review the Streamlit worksta
 1. Upload the trusted trade file.
 2. Select sector, issuer, and date range in `Issuer Selection`.
 3. Apply maturity, trade-size, trade-type, and lot/block filters in `Trading Filters`.
-4. Review `Market Analytics`: volume overview, activity heatmap, participation, and liquidity.
+4. Review `Market Analytics`: volume overview, activity concentration map, participation, and ranked liquidity bands.
 5. Open `Security Drilldown`; inspect the CUSIPs driving the filtered activity.
 6. Review `Peer Comparison` under the same filters.
 7. Read `Narrative Insights` and confirm each observation is supported by the filtered data.
@@ -19,7 +19,7 @@ Use this page when asking a professional analyst to review the Streamlit worksta
 - Do trade rows, CUSIP count, and top CUSIP reconcile to the uploaded data?
 - Do the maturity, trade-size, trade-type, and lot/block filters behave as expected?
 - Do total par, trade count, and average trade size reconcile to the filtered source data?
-- Does the activity heatmap correctly show where trading is concentrated?
+- Does the activity concentration map correctly show where trading is concentrated?
 - Does dealer/customer/interdealer participation look correct?
 - Do liquidity metrics by maturity and trade size look reasonable?
 - Does the selected CUSIP trade path reconcile to source trades?

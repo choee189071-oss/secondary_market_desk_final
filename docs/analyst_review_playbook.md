@@ -8,7 +8,7 @@ This workstation is designed to become analyst-validated before broader use. The
 2. Confirm required trade fields, date coverage, CUSIP quality, and trade amount scaling.
 3. Select sector, issuer, and date range.
 4. Apply maturity, trade-size, trade-type, and lot/block filters.
-5. Review market analytics: volume overview, activity heatmap, participation, and liquidity.
+5. Review market analytics: volume overview, activity concentration map, participation, and ranked liquidity bands.
 6. Select the top CUSIP and review security drilldown, trade path, and source rows.
 7. Compare peer issuers under the same trading filters.
 8. Review narrative observations and confirm each one is supported by filtered data.

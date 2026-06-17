@@ -72,7 +72,7 @@ The default experience is intentionally focused:
 - Show conclusions, next actions, and key metrics before data tables.
 - Keep detailed audit tables, methodology evidence, and large ranking tables inside expanders.
 - Render only the chart modules the analyst selects.
-- Keep legacy methodology and export code available internally, but do not make it the default reading path.
+- Keep advanced methodology and export controls integrated into the same seven-step flow.
 
 ## Analyst Validation Workflow
 
@@ -81,7 +81,7 @@ The current review path is:
 1. Upload trade files.
 2. Select sector, issuer, and date range.
 3. Apply maturity, trade-size, trade-type, and lot/block filters.
-4. Validate market analytics: volume overview, activity heatmap, participation, and liquidity.
+4. Validate market analytics: volume overview, activity concentration map, participation, and ranked liquidity bands.
 5. Review the CUSIP-level security drilldown.
 6. Compare peer issuers under the same filters.
 7. Export filtered trades, security drilldown, peer metrics, Excel workbook, or PDF summary.

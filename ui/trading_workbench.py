@@ -54,7 +54,7 @@ TRADE_TYPE_BUCKETS = [
 
 LOT_BUCKETS = ["All", "Odd Lot", "Round Lot", "Block Trade"]
 
-DATE_RANGE_OPTIONS = ["1 Week", "1 Month", "3 Months", "6 Months", "1 Year", "Custom"]
+DATE_RANGE_OPTIONS = ["All", "1 Week", "1 Month", "3 Months", "6 Months", "1 Year", "Custom"]
 
 
 @dataclass
@@ -206,6 +206,8 @@ def _date_range_for_option(df: pd.DataFrame, option: str) -> tuple[pd.Timestamp,
     if dates.empty:
         return None
     end = dates.max().normalize()
+    if option == "All":
+        return None
     if option == "1 Week":
         start = end - pd.DateOffset(weeks=1)
     elif option == "1 Month":
@@ -223,6 +225,8 @@ def _date_range_for_option(df: pd.DataFrame, option: str) -> tuple[pd.Timestamp,
 
 def _apply_workbench_filters(df: pd.DataFrame, selection: WorkbenchSelection, issuer: str | None = None) -> pd.DataFrame:
     out = df.copy()
+    if selection.sector != "All" and "sector" in out.columns:
+        out = out[out["sector"].astype(str) == str(selection.sector)]
     if issuer:
         out = out[out["issuer"].astype(str) == str(issuer)]
     if selection.date_range is not None and "trade_date" in out.columns:
@@ -398,33 +402,78 @@ def _render_volume_overview(filtered_df: pd.DataFrame):
             safe_plotly_chart(fig)
 
 
-def _render_activity_heatmap(filtered_df: pd.DataFrame):
-    st.subheader("Trading Activity Heatmap")
+def _render_activity_concentration_map(filtered_df: pd.DataFrame):
+    st.subheader("Activity Concentration Map")
     if filtered_df.empty:
         st.info("No trades match the selected filters.")
         return
-    metric = st.radio("Heatmap metric", ["Trade Count", "Par Amount"], horizontal=True)
-    value_col = "trade_amount" if metric == "Par Amount" else "cusip"
-    agg_func = "sum" if metric == "Par Amount" else "count"
-    pivot = pd.pivot_table(
-        filtered_df,
-        index="workbench_maturity_bucket",
-        columns="trade_size_bucket",
-        values=value_col,
-        aggfunc=agg_func,
-        fill_value=0,
+    size_metric = st.radio(
+        "Bubble size",
+        ["Par Amount", "Trade Count"],
+        horizontal=True,
+        label_visibility="collapsed",
     )
-    pivot = pivot.reindex(index=[x for x in MATURITY_BUCKETS if x != "All"], columns=[x for x in TRADE_SIZE_BUCKETS if x != "All"], fill_value=0)
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=pivot.values,
-            x=pivot.columns.tolist(),
-            y=pivot.index.tolist(),
-            colorscale="Teal",
-            hovertemplate="Maturity: %{y}<br>Size: %{x}<br>Value: %{z:,.0f}<extra></extra>",
+    grouped = (
+        filtered_df.groupby(["workbench_maturity_bucket", "trade_size_bucket"], dropna=False)
+        .agg(
+            trade_count=("cusip", "count") if "cusip" in filtered_df.columns else ("trade_amount", "count"),
+            par_amount=("trade_amount", "sum"),
+            average_yield=("yield", "mean"),
+            average_spread_bps=("spread_bps", "mean"),
         )
+        .reset_index()
     )
-    fig.update_layout(height=420, xaxis_title="Trade Size Bucket", yaxis_title="Maturity Bucket")
+    if grouped.empty:
+        st.info("No maturity / trade-size concentration can be calculated.")
+        return
+    participant = (
+        filtered_df.groupby(["workbench_maturity_bucket", "trade_size_bucket", "participant_group"], dropna=False)
+        .agg(participant_par=("trade_amount", "sum"), participant_count=("cusip", "count") if "cusip" in filtered_df.columns else ("trade_amount", "count"))
+        .reset_index()
+        .sort_values(["workbench_maturity_bucket", "trade_size_bucket", "participant_par", "participant_count"], ascending=[True, True, False, False])
+    )
+    dominant = participant.drop_duplicates(["workbench_maturity_bucket", "trade_size_bucket"])[
+        ["workbench_maturity_bucket", "trade_size_bucket", "participant_group"]
+    ]
+    grouped = grouped.merge(dominant, on=["workbench_maturity_bucket", "trade_size_bucket"], how="left")
+    grouped = grouped[grouped["workbench_maturity_bucket"].isin([x for x in MATURITY_BUCKETS if x != "All"])]
+    grouped = grouped[grouped["trade_size_bucket"].isin([x for x in TRADE_SIZE_BUCKETS if x != "All"])]
+    if grouped.empty:
+        st.info("No known maturity / trade-size buckets match the selected filters.")
+        return
+    size_col = "par_amount" if size_metric == "Par Amount" else "trade_count"
+    fig = px.scatter(
+        grouped,
+        x="workbench_maturity_bucket",
+        y="trade_size_bucket",
+        size=size_col,
+        color="participant_group",
+        category_orders={
+            "workbench_maturity_bucket": [x for x in MATURITY_BUCKETS if x != "All"],
+            "trade_size_bucket": [x for x in TRADE_SIZE_BUCKETS if x != "All"],
+        },
+        hover_data={
+            "workbench_maturity_bucket": True,
+            "trade_size_bucket": True,
+            "participant_group": True,
+            "par_amount": ":,.0f",
+            "trade_count": ":,",
+            "average_yield": ":.3f",
+            "average_spread_bps": ":.1f",
+        },
+        labels={
+            "workbench_maturity_bucket": "Maturity Bucket",
+            "trade_size_bucket": "Trade Size Bucket",
+            "participant_group": "Dominant Participant",
+            "par_amount": "Par Amount",
+            "trade_count": "Trade Count",
+            "average_yield": "Average Yield",
+            "average_spread_bps": "Average Spread",
+        },
+        title="Where Filtered Trading Is Concentrated",
+        size_max=48,
+    )
+    fig.update_layout(height=430, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
     safe_plotly_chart(fig)
 
 
@@ -491,18 +540,34 @@ def _render_liquidity_dashboard(filtered_df: pd.DataFrame):
         "Average Yield": "average_yield",
         "Days Since Last Trade": "days_since_last_trade",
     }[metric]
-    pivot = grouped.pivot(index="workbench_maturity_bucket", columns="trade_size_bucket", values=metric_col)
-    pivot = pivot.reindex(index=[x for x in MATURITY_BUCKETS if x != "All"], columns=[x for x in TRADE_SIZE_BUCKETS if x != "All"])
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=pivot.values,
-            x=pivot.columns.tolist(),
-            y=pivot.index.tolist(),
-            colorscale="Viridis",
-            hovertemplate="Maturity: %{y}<br>Size: %{x}<br>Value: %{z:,.2f}<extra></extra>",
-        )
+    grouped = grouped[grouped["workbench_maturity_bucket"].isin([x for x in MATURITY_BUCKETS if x != "All"])]
+    grouped = grouped[grouped["trade_size_bucket"].isin([x for x in TRADE_SIZE_BUCKETS if x != "All"])]
+    if grouped.empty:
+        st.info("No liquidity bands match the selected filters.")
+        return
+    grouped["bucket_label"] = grouped["workbench_maturity_bucket"].astype(str) + " / " + grouped["trade_size_bucket"].astype(str)
+    grouped = grouped.sort_values(metric_col, ascending=(metric_col == "days_since_last_trade"))
+    fig = px.bar(
+        grouped.head(18),
+        x=metric_col,
+        y="bucket_label",
+        orientation="h",
+        color="workbench_maturity_bucket",
+        hover_data={
+            "trade_frequency": ":,",
+            "par_traded": ":,.0f",
+            "average_spread": ":.1f",
+            "average_yield": ":.3f",
+            "days_since_last_trade": ":.0f",
+        },
+        labels={
+            metric_col: metric,
+            "bucket_label": "Maturity / Size Band",
+            "workbench_maturity_bucket": "Maturity",
+        },
+        title=f"Ranked Liquidity Bands by {metric}",
     )
-    fig.update_layout(height=400, xaxis_title="Trade Size Bucket", yaxis_title="Maturity Bucket")
+    fig.update_layout(height=440, yaxis=dict(categoryorder="total ascending"), legend=dict(orientation="h"))
     safe_plotly_chart(fig)
     with st.expander("Liquidity detail table", expanded=False):
         safe_dataframe(grouped, hide_index=True)
@@ -551,13 +616,6 @@ def _render_security_drilldown(filtered_df: pd.DataFrame) -> pd.DataFrame:
         if c in detail.columns
     ]
     safe_dataframe(detail[display_cols] if display_cols else detail, hide_index=True, top_rows=15)
-    st.download_button(
-        "Download security drilldown CSV",
-        data=detail.to_csv(index=False).encode("utf-8"),
-        file_name="security_drilldown.csv",
-        mime="text/csv",
-    )
-
     if not detail.empty:
         selected_cusip = st.selectbox("CUSIP path", detail["cusip"].astype(str).tolist())
         path = drill_df[drill_df["cusip"].astype(str) == str(selected_cusip)].copy()
@@ -579,17 +637,17 @@ def _render_security_drilldown(filtered_df: pd.DataFrame) -> pd.DataFrame:
     return detail
 
 
-def _render_peer_comparison(prepared_df: pd.DataFrame, selection: WorkbenchSelection, filtered_df: pd.DataFrame) -> pd.DataFrame:
+def _render_peer_comparison(prepared_df: pd.DataFrame, selection: WorkbenchSelection, filtered_df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     section_anchor("workbench-peer-comparison", "5. Peer Comparison")
-    peers_available = [x for x in sorted(prepared_df["issuer"].dropna().astype(str).unique().tolist()) if x != selection.issuer]
+    same_filter_universe = _apply_workbench_filters(prepared_df, selection, issuer=None)
+    peers_available = [x for x in sorted(same_filter_universe["issuer"].dropna().astype(str).unique().tolist()) if x != selection.issuer]
     default_peers = peers_available[:2]
     peer_issuers = st.multiselect("Peer issuers", peers_available, default=default_peers)
     issuers = [selection.issuer] + peer_issuers
-    same_filter_universe = _apply_workbench_filters(prepared_df, selection, issuer=None)
     metrics = _peer_metrics(same_filter_universe, issuers)
     if metrics.empty:
         st.info("No peer trades match the same filters.")
-        return pd.DataFrame()
+        return pd.DataFrame(), peer_issuers
     c1, c2 = st.columns([0.55, 0.45])
     with c1:
         fig = px.bar(metrics, x="Issuer", y="Trade Volume", text_auto=".2s", title="Trade Volume Under Same Filters")
@@ -597,7 +655,7 @@ def _render_peer_comparison(prepared_df: pd.DataFrame, selection: WorkbenchSelec
         safe_plotly_chart(fig)
     with c2:
         safe_dataframe(metrics, hide_index=True, auto_collapse=False)
-    return metrics
+    return metrics, peer_issuers
 
 
 def _build_narrative(filtered_df: pd.DataFrame, security_detail: pd.DataFrame, selection: WorkbenchSelection) -> list[str]:
@@ -715,7 +773,7 @@ def render_trading_workbench(
         selected_issuer = st.selectbox("Issuer", issuer_options)
     issuer_base = prepared[prepared["issuer"].astype(str) == selected_issuer].copy()
     with c3:
-        date_option = st.selectbox("Date Range", DATE_RANGE_OPTIONS, index=4)
+        date_option = st.selectbox("Date Range", DATE_RANGE_OPTIONS, index=5)
     date_range = _date_range_for_option(issuer_base, date_option)
     if date_option == "Custom":
         dates = pd.to_datetime(issuer_base["trade_date"], errors="coerce").dropna()
@@ -751,6 +809,7 @@ def render_trading_workbench(
         trade_type_bucket=trade_type_bucket,
         lot_bucket=lot_bucket,
     )
+    filtered_universe = _apply_workbench_filters(prepared, selection, issuer=None)
     filtered_issuer = _apply_workbench_filters(prepared, selection, issuer=selected_issuer)
     _active_filter_summary(selection)
     _render_summary_cards(filtered_issuer)
@@ -760,57 +819,30 @@ def render_trading_workbench(
     _render_volume_overview(filtered_issuer)
     a1, a2 = st.columns([0.52, 0.48])
     with a1:
-        _render_activity_heatmap(filtered_issuer)
+        _render_activity_concentration_map(filtered_issuer)
     with a2:
         _render_participation(filtered_issuer)
     _render_liquidity_dashboard(filtered_issuer)
 
     security_detail = _render_security_drilldown(filtered_issuer)
-    peer_metrics = _render_peer_comparison(prepared, selection, filtered_issuer)
+    peer_metrics, peer_issuers = _render_peer_comparison(prepared, selection, filtered_issuer)
 
-    section_anchor("workbench-narrative-insights", "6. Narrative Insights")
+    section_anchor("workbench-narrative-insights", "5B. Narrative Read-Through")
     observations = _build_narrative(filtered_issuer, security_detail, selection)
     for obs in observations:
         st.markdown(f"<div class='methodology-note'>{_html_escape(obs)}</div>", unsafe_allow_html=True)
 
-    section_anchor("workbench-export", "7. Export")
-    e1, e2, e3, e4 = st.columns(4)
-    with e1:
-        st.download_button(
-            "Filtered trades CSV",
-            data=filtered_issuer.to_csv(index=False).encode("utf-8"),
-            file_name=f"{selected_issuer}_filtered_trades.csv".replace(" ", "_"),
-            mime="text/csv",
-        )
-    with e2:
-        st.download_button(
-            "Security table CSV",
-            data=security_detail.to_csv(index=False).encode("utf-8"),
-            file_name=f"{selected_issuer}_security_drilldown.csv".replace(" ", "_"),
-            mime="text/csv",
-            disabled=security_detail.empty,
-        )
-    with e3:
-        excel = _excel_bytes(filtered_issuer, security_detail, peer_metrics)
-        st.download_button(
-            "Excel workbook",
-            data=excel or b"",
-            file_name=f"{selected_issuer}_trading_workbench.xlsx".replace(" ", "_"),
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            disabled=excel is None,
-        )
-    with e4:
-        pdf = _pdf_bytes(selection, observations, filtered_issuer)
-        st.download_button(
-            "PDF summary",
-            data=pdf or b"",
-            file_name=f"{selected_issuer}_trading_workbench.pdf".replace(" ", "_"),
-            mime="application/pdf",
-            disabled=pdf is None,
-        )
-
     return {
         "selection": selection,
+        "prepared_df": prepared,
+        "filtered_universe_df": filtered_universe,
+        "filtered_issuer_df": filtered_issuer,
+        "security_detail_df": security_detail,
+        "peer_metrics_df": peer_metrics,
+        "observations": observations,
+        "selected_issuer": selected_issuer,
+        "selected_sector": selected_sector,
+        "peer_issuers": peer_issuers,
         "filtered_rows": len(filtered_issuer),
         "security_rows": len(security_detail),
         "peer_rows": len(peer_metrics),

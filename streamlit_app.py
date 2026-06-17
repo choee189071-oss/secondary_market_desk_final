@@ -1611,43 +1611,32 @@ def render_advanced_audit_gateway(
     safe_issuer = html.escape(str(selected_issuer or "Selected issuer"), quote=True)
     safe_sector = html.escape(str(selected_sector or "Unknown"), quote=True)
     safe_benchmark = html.escape(str(benchmark_source_mode or "Unknown"), quote=True)
-    render_workflow_header(FULL_DASHBOARD_LABEL, files_loaded=files_loaded, issuers_loaded=issuers_loaded)
+    section_anchor("advanced-analysis", "6. Advanced Analysis")
     st.markdown(
         f"""
-<div class="advanced-gateway">
-  <div class="advanced-gateway-title">Advanced Audit Workspace</div>
-  <div class="advanced-gateway-copy">
-    This section keeps the full long-form workstation available for reviewer checks, methodology tracing,
-    and older analytical modules. Use this page after RV / Watchlist and before final export when you need
-    deeper evidence for <b>{safe_issuer}</b>, sector context, benchmark diagnostics, or export support.
-  </div>
-  <div class="focus-band">
-    <b>Current context:</b> {safe_issuer} &nbsp; | &nbsp;
+<div class="focus-band">
+  <b>Same filter scope:</b> Advanced analysis uses the Section 2 Trading Filters above. &nbsp; | &nbsp;
+  <b>Issuer:</b> {safe_issuer} &nbsp; | &nbsp;
     <b>Sector:</b> {safe_sector} &nbsp; | &nbsp;
     <b>Benchmark:</b> {safe_benchmark}
-  </div>
-  <div class="advanced-link-grid">
-    <div class="advanced-link-card">
-      <a href="#desk-market-snapshot">Desk Snapshot</a>
-      <div class="advanced-link-note">Spread trend, volume, curve snapshot, and top movers.</div>
-    </div>
-    <div class="advanced-link-card">
-      <a href="#yield-relative-value">Benchmark & RV</a>
-      <div class="advanced-link-note">Yield trend, issuer curve, spread framework, and attribution.</div>
-    </div>
-    <div class="advanced-link-card">
-      <a href="#cusip-drilldown">CUSIP Evidence</a>
-      <div class="advanced-link-note">Security detail, path history, peer table, and screener.</div>
-    </div>
-    <div class="advanced-link-card">
-      <a href="#report-export-center">Export & Methodology</a>
-      <div class="advanced-link-note">Reports, review outputs, benchmark policy, and downloads.</div>
-    </div>
-  </div>
 </div>
 """,
         unsafe_allow_html=True,
     )
+    with st.expander("Advanced analysis map", expanded=False):
+        st.markdown(
+            """
+<div class="sidebar-nav-small">
+<a href="#desk-market-snapshot">Desk Snapshot</a> ·
+<a href="#yield-relative-value">Benchmark / RV</a> ·
+<a href="#cusip-drilldown">CUSIP Evidence</a> ·
+<a href="#scenario-shock">Scenario Shock</a> ·
+<a href="#recommendation-engine">Narrative</a> ·
+<a href="#workflow-export-methodology">Final Export</a>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
 
 
 # Focused watchlist helpers live in ui/cusip_detail.py.
@@ -1888,10 +1877,9 @@ def section_directory():
 <b>5. Outputs, methodology & raw detail</b><br>
 <a href="#spread-movement">Spread Movement</a> ·
 <a href="#cusip-drilldown">CUSIP Drilldown</a> ·
-<a href="#report-export-center">Report Export Center</a> ·
-<a href="#export-summary">Export Summary</a> ·
 <a href="#admin-methodology">Admin Methodology</a> ·
 <a href="#version-changelog">Version / Change Log</a> ·
+<a href="#workflow-export-methodology">Export / Methodology</a> ·
 <a href="#downloads">Downloads</a>
 </div>
 """,
@@ -2026,11 +2014,6 @@ with st.sidebar:
             "Show full raw tables",
             value=False,
             help="Usually keep this off. Full raw tables are one of the biggest Streamlit slowdowns.",
-        )
-        ENABLE_REPORT_EXPORTS = st.checkbox(
-            "Enable report export builder",
-            value=False,
-            help="Keep off while exploring. Report export recomputes multiple charts and can slow the app.",
         )
         if st.button("Clear cached calculations"):
             st.cache_data.clear()
@@ -2249,118 +2232,51 @@ Trade-sheet index rates and an external MMD sheet may differ by date, tenor, rou
             hide_index=True,
         )
 
-render_trading_workbench(
+pre_workbench_sector_overrides = st.session_state.get("issuer_sector_overrides", {})
+if pre_workbench_sector_overrides and "issuer" in market_df.columns:
+    for _issuer_name, _sector_value in pre_workbench_sector_overrides.items():
+        market_df.loc[market_df["issuer"] == _issuer_name, "sector"] = _sector_value
+        if "issuer" in issuer_master.columns:
+            issuer_master.loc[issuer_master["issuer"] == _issuer_name, "sector"] = _sector_value
+
+workbench_state = render_trading_workbench(
     market_df=market_df,
     bonds_df=bonds_df,
     issuer_master=issuer_master,
     benchmark_source_mode=benchmark_source_mode,
 )
-st.markdown("---")
-st.markdown(
-    """
-<div class="advanced-gateway">
-  <div class="advanced-gateway-title">Full Chart Library / Advanced Audit</div>
-  <div class="advanced-gateway-copy">
-    The Trading Workbench above is the new front-door workflow. The full set of previously built charts,
-    drilldowns, RV views, narrative modules, and export tools remains available below for deeper analysis.
-  </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
 workflow_view = FULL_DASHBOARD_LABEL
 
+workbench_selection = workbench_state.get("selection") if isinstance(workbench_state, dict) else None
+workbench_filtered_universe = workbench_state.get("filtered_universe_df") if isinstance(workbench_state, dict) else None
+workbench_peer_issuers = workbench_state.get("peer_issuers", []) if isinstance(workbench_state, dict) else []
+
+if isinstance(workbench_filtered_universe, pd.DataFrame):
+    market_df = workbench_filtered_universe.copy()
+    if "issuer" in market_df.columns:
+        uploaded_issuers = sorted(market_df["issuer"].dropna().astype(str).unique().tolist())
+
+selected_issuer = (
+    getattr(workbench_selection, "issuer", None)
+    or (workbench_state.get("selected_issuer") if isinstance(workbench_state, dict) else None)
+    or (uploaded_issuers[0] if uploaded_issuers else "")
+)
+if selected_issuer and selected_issuer not in uploaded_issuers:
+    uploaded_issuers = [selected_issuer] + uploaded_issuers
+
+peer_options_sidebar = [x for x in uploaded_issuers if x != selected_issuer]
+comparison_issuers_sidebar = [x for x in workbench_peer_issuers if x in peer_options_sidebar]
+if not comparison_issuers_sidebar:
+    comparison_issuers_sidebar = peer_options_sidebar[:2] if peer_options_sidebar else []
+
+selected_maturity_year = "All"
+maturity_bucket = getattr(workbench_selection, "maturity_bucket", "All") if workbench_selection else "All"
+selected_trade_date_range = getattr(workbench_selection, "date_range", None) if workbench_selection else None
+trade_date_filter_enabled = False
+trade_date_range = None
+
 with st.sidebar:
-    sidebar_section_label("Context")
-    sidebar_status_card(
-        "Loaded",
-        f"{len(uploaded_issuers):,} issuer(s)",
-        f"{len(market_df):,} trades across {len(trade_files):,} file(s)",
-    )
-    selected_issuer = st.selectbox(
-        "Issuer",
-        uploaded_issuers,
-        help="Main issuer shown first in snapshot, charts, drilldown, and exports.",
-    )
-
-    peer_options_sidebar = [x for x in uploaded_issuers if x != selected_issuer]
-    default_peers_sidebar = peer_options_sidebar[:2] if peer_options_sidebar else []
-    comparison_issuers_sidebar = st.multiselect(
-        "Peers",
-        peer_options_sidebar,
-        default=default_peers_sidebar,
-        help="Optional issuers to plot beside the selected issuer.",
-    )
-
-    sidebar_section_label("Filters")
-    selected_trade_date_range = None
-    trade_date_filter_enabled = False
-    snapshot_period = st.selectbox(
-        "Period",
-        ["All", "Last 3M", "Last 6M", "Last 1Y", "YTD", "Custom"],
-        index=3,
-        help="This filters the dataset. Plotly zoom only changes the view.",
-    )
-    if "trade_date" in market_df.columns:
-        _trade_dates = pd.to_datetime(market_df["trade_date"], errors="coerce").dropna()
-        if not _trade_dates.empty:
-            _min_ts = _trade_dates.min().normalize()
-            _max_ts = _trade_dates.max().normalize()
-            _min_date = _min_ts.date()
-            _max_date = _max_ts.date()
-            if snapshot_period == "All":
-                trade_date_filter_enabled = False
-                selected_trade_date_range = None
-                period_note = f"{_min_ts:%m/%d/%Y} to {_max_ts:%m/%d/%Y}"
-            elif snapshot_period == "Custom":
-                trade_date_filter_enabled = True
-                selected_trade_date_range = st.date_input(
-                    "Custom range",
-                    value=(_min_date, _max_date),
-                    min_value=_min_date,
-                    max_value=_max_date,
-                    help="Choose the exact trade-date period to show in charts and tables.",
-                )
-                period_note = "Custom date range"
-            else:
-                trade_date_filter_enabled = True
-                if snapshot_period == "Last 3M":
-                    _start_ts = max(_min_ts, _max_ts - pd.DateOffset(months=3))
-                elif snapshot_period == "Last 6M":
-                    _start_ts = max(_min_ts, _max_ts - pd.DateOffset(months=6))
-                elif snapshot_period == "Last 1Y":
-                    _start_ts = max(_min_ts, _max_ts - pd.DateOffset(years=1))
-                elif snapshot_period == "YTD":
-                    _start_ts = max(_min_ts, pd.Timestamp(year=_max_ts.year, month=1, day=1))
-                else:
-                    _start_ts = _min_ts
-                selected_trade_date_range = (_start_ts.date(), _max_date)
-                period_note = f"{_start_ts:%m/%d/%Y} to {_max_ts:%m/%d/%Y}"
-            st.caption(period_note)
-        else:
-            st.caption("No valid trade dates detected.")
-    else:
-        st.caption("Trade-date filter unavailable.")
-
-    issuer_year_values = []
-    if "maturity_year" in market_df.columns:
-        issuer_year_values = (
-            market_df.loc[market_df["issuer"] == selected_issuer, "maturity_year"]
-            .dropna()
-            .astype(int)
-            .sort_values()
-            .unique()
-            .tolist()
-        )
-    maturity_year_options = ["All"] + [f"{int(y)}Y" for y in issuer_year_values if int(y) >= 1]
-    selected_maturity_year = st.selectbox(
-        "Maturity",
-        maturity_year_options,
-        help="Integer years to maturity. Example: 4.3 years is grouped as 5Y.",
-    )
-    maturity_bucket = selected_maturity_year
-    trade_date_range = selected_trade_date_range
-
+    sidebar_section_label("Display")
     with st.expander("Chart controls", expanded=False):
         snapshot_reference_lines = st.multiselect(
             "Reference lines",
@@ -2374,6 +2290,10 @@ with st.sidebar:
             index=0,
             help="Controls whether volume stacks selected issuers against the rest of the uploaded market universe.",
         )
+        if comparison_issuers_sidebar:
+            st.caption("Linked peers: " + ", ".join(comparison_issuers_sidebar))
+        else:
+            st.caption("No linked peer issuers matched the active filters.")
 
     sidebar_section_label("Benchmark")
     sidebar_status_card("Active source", benchmark_source_mode, benchmark_conflict_policy)
@@ -2413,7 +2333,7 @@ with st.sidebar:
         st.markdown(
             """
 <div class="sidebar-nav-small">
-<b>Advanced Audit jump list</b><br>
+<b>Analysis navigation</b><br>
 <a href="#desk-market-snapshot">Desk Market Snapshot</a><br>
 <a href="#yield-relative-value">Secondary Market Spreads</a><br>
 <a href="#issuer-curve">Issuer Curve vs Benchmark</a><br>
@@ -2423,6 +2343,7 @@ with st.sidebar:
 <a href="#security-screener">Security Screener</a><br>
 <a href="#peer-rv">Peer RV Comparison</a><br>
 <a href="#cross-issuer-rv">Cross-Issuer RV Analytics</a><br>
+<a href="#workflow-export-methodology">Export / Methodology</a><br>
 <a href="#downloads">Downloads</a>
 </div>
 """,
@@ -2466,12 +2387,12 @@ with st.sidebar:
     with st.expander("Version", expanded=False):
         st.markdown(
             """
-**Current Version:** `v1.3-sidebar-redesign`
+**Current Version:** `v1.4-linked-workbench`
 
 Recent additions:
-- Seven-step workflow
-- Advanced Audit before Export
-- Reviewer handoff pack
+- Single Section 2 filter scope across all analysis sections
+- Activity concentration map
+- Ranked liquidity bands
 - Compact sidebar hierarchy
             """
         )
@@ -2485,8 +2406,12 @@ if issuer_sector_overrides and "issuer" in market_df.columns:
         if "issuer" in issuer_master.columns:
             issuer_master.loc[issuer_master["issuer"] == _issuer_name, "sector"] = _sector_value
 
-issuer_bonds = bonds_df[bonds_df["issuer"] == selected_issuer].copy()
 issuer_trades = market_df[market_df["issuer"] == selected_issuer].copy()
+issuer_bonds = bonds_df[bonds_df["issuer"] == selected_issuer].copy()
+if not issuer_trades.empty and not issuer_bonds.empty and {"cusip"}.issubset(issuer_trades.columns) and {"cusip"}.issubset(issuer_bonds.columns):
+    filtered_cusips = set(issuer_trades["cusip"].dropna().astype(str))
+    if filtered_cusips:
+        issuer_bonds = issuer_bonds[issuer_bonds["cusip"].astype(str).isin(filtered_cusips)].copy()
 
 # -----------------------------------------------------------------------------
 # Trade-only compatibility guard
@@ -2515,18 +2440,6 @@ for _df in [market_df, issuer_trades]:
             if _col not in _df.columns:
                 _df[_col] = _default
 
-
-if issuer_sector_overrides:
-    sector_download_df = pd.DataFrame(
-        [{"issuer": k, "sector": v, "primary_type": pd.NA} for k, v in issuer_sector_overrides.items()]
-    )
-    with st.sidebar.expander("Download sector overrides", expanded=False):
-        st.download_button(
-            "Download issuer_sector_overrides.csv",
-            data=sector_download_df.to_csv(index=False).encode("utf-8"),
-            file_name="issuer_sector_overrides.csv",
-            mime="text/csv",
-        )
 
 selected_sector = "Unknown"
 if "sector" in market_df.columns:
@@ -2596,7 +2509,7 @@ render_advanced_audit_gateway(
 section_anchor("desk-market-snapshot", "Desk Market Snapshot")
 st.caption(
     "Desk-style opening view: multi-issuer spread trend, stacked trading volume, curve snapshot, and top movers. "
-    "Use the sidebar to add peer issuers and reference lines."
+    "All rows are already scoped by the Trading Filters above."
 )
 
 snapshot_issuers = [selected_issuer] + [x for x in comparison_issuers_sidebar if x != selected_issuer]
@@ -4157,14 +4070,6 @@ else:
                             if c in q_display.columns:
                                 q_display[c] = pd.to_numeric(q_display[c], errors="coerce").round(2)
                         safe_dataframe(q_display, width="stretch", hide_index=True, auto_collapse=False, height=420)
-
-                        csv_candidates = candidates.to_csv(index=False).encode("utf-8")
-                        st.download_button(
-                            label="Download Top Relative Value Candidates CSV",
-                            data=csv_candidates,
-                            file_name="top_relative_value_candidates.csv",
-                            mime="text/csv",
-                        )
 
                     with st.expander("Screener universe audit table", expanded=False):
                         audit_cols = [
@@ -7345,13 +7250,6 @@ else:
             )
             safe_dataframe(shock_assumption_df, width="stretch", hide_index=True)
 
-            st.download_button(
-                label="Download Scenario Shock Results CSV",
-                data=bucket_summary.to_csv(index=False).encode("utf-8"),
-                file_name="scenario_shock_results.csv",
-                mime="text/csv",
-            )
-
 
 section_anchor("watchlist", "Watchlist / Saved Candidates")
 with st.expander("Methodology: watchlist / saved candidates", expanded=False):
@@ -7438,13 +7336,6 @@ else:
         )
         st.metric("Saved CUSIPs", f"{len(watchlist_summary):,}")
         safe_dataframe(watchlist_summary, width="stretch", hide_index=True)
-
-        st.download_button(
-            label="Download Watchlist CSV",
-            data=watchlist_summary.to_csv(index=False).encode("utf-8"),
-            file_name="watchlist_saved_candidates.csv",
-            mime="text/csv",
-        )
 
 
 section_anchor("recommendation-engine", "Trade Recommendation Narrative Engine")
@@ -8239,23 +8130,9 @@ if "latest_retrieved_market_context" in st.session_state:
     st.subheader("Retrieved Market / Sector Context")
     st.markdown(st.session_state["latest_retrieved_market_context"])
 
-    st.download_button(
-        label="Download Retrieved Market Context Markdown",
-        data=st.session_state["latest_retrieved_market_context"].encode("utf-8"),
-        file_name=f"{selected_issuer}_retrieved_market_context.md".replace(" ", "_"),
-        mime="text/markdown",
-    )
-
 if "latest_ai_commentary" in st.session_state:
     st.subheader("Generated Institutional Commentary")
     st.markdown(st.session_state["latest_ai_commentary"])
-
-    st.download_button(
-        label="Download AI Commentary Markdown",
-        data=st.session_state["latest_ai_commentary"].encode("utf-8"),
-        file_name=f"{selected_issuer}_ai_market_commentary.md".replace(" ", "_"),
-        mime="text/markdown",
-    )
 
 with st.expander("Recommended AI architecture for this dashboard", expanded=False):
     st.markdown(
@@ -8329,7 +8206,8 @@ safe_dataframe(issuer_trades[[c for c in trade_cols if c in issuer_trades.column
 
 
 
-if ENABLE_REPORT_EXPORTS:
+DEFER_LEGACY_REPORT_EXPORT_CENTER = True
+if ENABLE_REPORT_EXPORTS and not DEFER_LEGACY_REPORT_EXPORT_CENTER:
     section_anchor("report-export-center", "Report Export Center")
     with st.expander("Methodology: report export center", expanded=False):
         st.markdown(
@@ -8694,87 +8572,14 @@ if ENABLE_REPORT_EXPORTS:
         )
 
 
-else:
+elif not DEFER_LEGACY_REPORT_EXPORT_CENTER:
     section_anchor("report-export-center", "Report Export Center")
     st.info("Report export builder is disabled for speed. Enable it in the sidebar Performance panel when you need HTML/PDF/PPTX exports.")
     export_chart_items = []
     export_data_items = {}
-section_anchor("export-summary", "Export Summary Package")
-with st.expander("Methodology: export summary package", expanded=False):
-    st.markdown(
-        """
-This section generates a lightweight export package that can be copied into internal updates, pitchbook drafts, or meeting notes.
-
-**Current implementation:**
-
-- Generates a Markdown summary and an HTML summary.
-- Uses the selected issuer, selected sector, counts, latest trade date, and available dashboard outputs.
-- For PDF export, open the HTML file in a browser and print/save as PDF.
-- For PowerPoint, copy the HTML/Markdown summary into your deck and insert key charts from the dashboard.
-
-This avoids adding fragile report-generation dependencies while keeping the workflow practical for internal use.
-        """
-    )
-
-latest_trade_text = issuer_trades["trade_date"].max().strftime("%m/%d/%Y") if not issuer_trades.empty else "No trades"
-summary_timestamp = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
-summary_lines = [
-    f"# Municipal Secondary Market Dashboard Summary",
-    "",
-    f"**Generated:** {summary_timestamp}",
-    f"**Selected Issuer:** {selected_issuer}",
-    f"**Sector:** {selected_sector}",
-    f"**Securities:** {len(issuer_bonds):,}",
-    f"**Trades in Current Filter:** {len(issuer_trades):,}",
-    f"**Latest Trade:** {latest_trade_text}",
-    "",
-    "## Key Dashboard Modules",
-    "- Yield Trend / Relative Value Comparison",
-    "- Issuer Curve vs Benchmark Curve",
-    "- Current Spread Level Framework",
-    "- Peer and Cross-Issuer Relative Value",
-    "- Historical Spread Percentile",
-    "- Security Screener",
-    "- Recommendation Narrative",
-    "- Scenario Shock Analysis",
-    "- CUSIP Opportunity Drilldown",
-    "",
-    "## Notes",
-    "- Benchmark curves use uploaded rating curves when available; otherwise the dashboard falls back to MMD/AAA plus visible spread assumptions.",
-    "- Liquidity, RV score, dealer proxy, and scenario shock outputs are screening tools, not final trade recommendations.",
-]
-
-if "data_quality_score" in locals():
-    summary_lines.extend([
-        "",
-        "## Data Quality",
-        f"- Data Quality Score: {data_quality_score:.1f}/100",
-        f"- Valid CUSIP Rate: {cusip_match_rate:.1f}%",
-        f"- Known Maturity Year Rate: {known_bucket_rate:.1f}%",
-        f"- Duplicates Removed: {duplicates_removed:,}",
-    ])
-
-summary_md = "\n".join(summary_lines)
-summary_html = summary_md.replace("\n", "<br>")
-
-export_c1, export_c2 = st.columns(2)
-with export_c1:
-    st.download_button(
-        label="Download Markdown Summary",
-        data=summary_md.encode("utf-8"),
-        file_name=f"{selected_issuer}_dashboard_summary.md".replace(" ", "_"),
-        mime="text/markdown",
-    )
-with export_c2:
-    st.download_button(
-        label="Download HTML Summary",
-        data=f"<html><body>{summary_html}</body></html>".encode("utf-8"),
-        file_name=f"{selected_issuer}_dashboard_summary.html".replace(" ", "_"),
-        mime="text/html",
-    )
-
-with st.expander("Preview export summary", expanded=True):
-    st.markdown(summary_md)
+else:
+    export_chart_items = []
+    export_data_items = {}
 
 section_anchor("admin-methodology", "Admin Methodology Page")
 st.markdown(
@@ -8816,20 +8621,10 @@ section_anchor("version-changelog", "Version / Change Log")
 version_rows = [
     {"Version": "v1.0-team-ready", "Change": "Stabilized data validation, benchmark framework, relative value analytics, and team-readiness modules."},
     {"Version": "v1.1", "Change": "Added Cross-Issuer RV Analytics, Scenario Shock, Recommendation Narrative, and CUSIP Drilldown."},
-    {"Version": "v1.2", "Change": "Added Data Quality Scorecard, Export Summary Package, Admin Methodology Page, and Watchlist."},
+    {"Version": "v1.2", "Change": "Added Data Quality Scorecard, Admin Methodology Page, Watchlist, and final export package."},
 ]
 safe_dataframe(pd.DataFrame(version_rows), width="stretch", hide_index=True)
 st.caption("Update this changelog whenever the team changes methodology, assumptions, or major modules.")
-
-
-section_anchor("downloads", "Download Outputs")
-d1, d2, d3 = st.columns(3)
-with d1:
-    dataframe_download_button(market_df, "Download Merged Market Data CSV", "merged_market_data.csv")
-with d2:
-    dataframe_download_button(issuer_master, "Download Issuer Master CSV", "issuer_master.csv")
-with d3:
-    dataframe_download_button(bonds_df, "Download Security Reference CSV", "security_reference.csv")
 
 if show_raw_tables:
     st.header("Raw / Processed Tables")
@@ -8841,3 +8636,30 @@ if show_raw_tables:
     safe_dataframe(trades_df.head(20000), width="stretch")
     st.subheader("Merged Market Data")
     safe_dataframe(market_df.head(20000), width="stretch")
+
+st.markdown("---")
+render_focused_export_methodology(
+    selected_issuer,
+    selected_sector,
+    market_df,
+    issuer_trades,
+    issuer_bonds,
+    mmd_df,
+    benchmark_source_mode,
+    benchmark_priority,
+    benchmark_conflict_policy,
+    build_report_context=_build_focused_report_context,
+    section_anchor=section_anchor,
+    clean_metric_card=clean_metric_card,
+    safe_dataframe=safe_dataframe,
+    render_benchmark_methodology_block=_render_benchmark_methodology_block,
+)
+
+section_anchor("downloads", "Download Outputs")
+d1, d2, d3 = st.columns(3)
+with d1:
+    dataframe_download_button(market_df, "Download Filtered Market Data CSV", "filtered_market_data.csv")
+with d2:
+    dataframe_download_button(issuer_master, "Download Issuer Master CSV", "issuer_master.csv")
+with d3:
+    dataframe_download_button(issuer_bonds, "Download Filtered Security Reference CSV", "filtered_security_reference.csv")
