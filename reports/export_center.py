@@ -124,14 +124,19 @@ def focused_report_filename(label: str, suffix: str) -> str:
 
 
 def _context_trust_layers(context: dict) -> dict[str, pd.DataFrame]:
-    existing = context.get("methodology_trust_layers")
-    if isinstance(existing, dict):
-        return existing
-    return methodology_trust_layers(
+    fallback = methodology_trust_layers(
         benchmark_source_mode=str(context.get("benchmark_source_mode", "")),
         benchmark_priority=str(context.get("benchmark_priority", "")),
         benchmark_conflict_policy=str(context.get("benchmark_conflict_policy", "")),
     )
+    existing = context.get("methodology_trust_layers")
+    if isinstance(existing, dict):
+        merged = fallback.copy()
+        for key, value in existing.items():
+            if isinstance(value, pd.DataFrame) and not value.empty:
+                merged[key] = value
+        return merged
+    return fallback
 
 
 def focused_methodology_appendix(
