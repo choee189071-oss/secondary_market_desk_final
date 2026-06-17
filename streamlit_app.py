@@ -88,7 +88,6 @@ from ui.snapshot import (
 from ui.trading_workbench import render_trading_workbench
 from ui.upload import (
     display_validation_report,
-    render_upload_file_cards,
 )
 
 
@@ -1777,65 +1776,6 @@ Trade-sheet Index / Index Rate is retained as fallback and audit evidence; the a
 # Focused snapshot renderer lives in ui/snapshot.py.
 
 
-with st.expander("Instructions", expanded=False):
-    st.markdown(
-        """
-<div style='font-size:15px; color:black; line-height:1.45;'>
-
-<h4 style='margin-bottom:6px;'>Desk-First Workflow</h4>
-
-This dashboard is designed to behave like a lightweight secondary-market desk tool. Start with the trade tape, then use optional reference files only when they improve the analysis.
-
-<h5 style='margin-bottom:4px;'>1. Required Input: MuniPro Trade History</h5>
-<div style='padding-left:18px;'>
-<ul style='margin-top:2px; margin-bottom:6px;'>
-<li>Upload one or more MuniPro trade-history files.</li>
-<li>Name each file after the issuer, for example <code>LADWP_Trade.xlsx</code> or <code>State_of_California_Trade.csv</code>.</li>
-<li>The app uses the file name as the issuer name. This avoids confusing bond-purpose text like <code>GO Various Purpose</code>, <code>Power</code>, or <code>Water</code> with the issuer.</li>
-</ul>
-
-<b>Minimum fields:</b><br>
-CUSIP / CUSIP9, Trade Date, Yield, Maturity Date<br><br>
-
-<b>Recommended fields:</b><br>
-Trade Date/Time, Description, Coupon, Price, Trade Amount, Index, Index Rate, Spread, Trade Type, Ratings M/S/F
-</div>
-
-<h5 style='margin-top:10px; margin-bottom:4px;'>2. Optional Reference Files</h5>
-<div style='padding-left:18px;'>
-<ul style='margin-top:2px; margin-bottom:6px;'>
-<li><b>Bond Reference:</b> use only for enrichment such as call date, call price, lien, tax status, and outstanding amount.</li>
-<li><b>Issuer / Sector Mapping:</b> use when you want persistent sector labels instead of manual overrides.</li>
-<li><b>MMD Curve:</b> use as the preferred benchmark only when you upload a clean, small curve file for the research period. Avoid oversized historical files.</li>
-</ul>
-</div>
-
-<h5 style='margin-top:10px; margin-bottom:4px;'>3. Recommended Reading Order</h5>
-<div style='padding-left:18px;'>
-<ol style='margin-top:2px; margin-bottom:6px;'>
-<li><b>Desk Market Snapshot</b>: spread trend, trading volume, curve snapshot, and top movers.</li>
-<li><b>Issuer Curve vs Benchmark</b>: where the issuer curve sits versus the active benchmark.</li>
-<li><b>Spread Movement Ladder</b>: use as a drilldown, not the first page.</li>
-<li><b>Liquidity / Trading Frequency</b>: confirm whether the signal is supported by enough trading activity.</li>
-<li><b>CUSIP Drilldown / Screener</b>: investigate specific bonds after the high-level view.</li>
-</ol>
-</div>
-
-<h5 style='margin-top:10px; margin-bottom:4px;'>4. Performance Tips</h5>
-<div style='padding-left:18px;'>
-<ul style='margin-top:2px; margin-bottom:2px;'>
-<li>Keep <b>Fast mode</b> on while exploring.</li>
-<li>Do not show full raw tables unless auditing data.</li>
-<li>Use MMD files covering only the years you are researching.</li>
-<li>Use the sidebar index to jump to the most-used desk sections first.</li>
-</ul>
-</div>
-
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
 # -----------------------------------------------------------------------------
 # Team-readiness validation UI
 # -----------------------------------------------------------------------------
@@ -2020,18 +1960,6 @@ with st.expander(
         st.caption("If provided, uploaded MMD is the active AAA benchmark. Trade-sheet Index Rate is fallback only.")
 
     demo_mode_active, demo_status = _render_golden_sample_controls(len(trade_files or []))
-
-    render_upload_file_cards(
-        trade_file_names=[f.name for f in trade_files] if trade_files else [],
-        bond_file_name=bond_file.name if bond_file else None,
-        issuer_mapping_file_name=issuer_mapping_file.name if issuer_mapping_file else None,
-        mmd_file_name=(
-            mmd_file.name
-            if mmd_file
-            else (Path(demo_status.get("mmd_path", "")).name if demo_mode_active and demo_status.get("mmd_path") else None)
-        ),
-        use_external_mmd_fallback=use_external_mmd_fallback,
-    )
 
     with st.expander("Download blank templates", expanded=False):
         template_download_button(TRADE_REQUIRED + TRADE_RECOMMENDED + TRADE_OPTIONAL, "Trade template CSV", "trade_history_template.csv")

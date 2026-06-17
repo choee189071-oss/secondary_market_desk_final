@@ -998,12 +998,12 @@ def _render_volume_overview(filtered_df: pd.DataFrame):
 
 
 def _render_activity_concentration_map(filtered_df: pd.DataFrame):
-    st.subheader("Activity Concentration Map")
+    st.subheader("Activity Concentration")
     if filtered_df.empty:
         st.info("No trades match the selected filters.")
         return
-    size_metric = st.radio(
-        "Bubble size",
+    metric_label = st.radio(
+        "Rank by",
         ["Par Amount", "Trade Count"],
         horizontal=True,
         label_visibility="collapsed",
@@ -1021,54 +1021,54 @@ def _render_activity_concentration_map(filtered_df: pd.DataFrame):
     if grouped.empty:
         st.info("No maturity / trade-size concentration can be calculated.")
         return
-    participant = (
-        filtered_df.groupby(["workbench_maturity_bucket", "trade_size_bucket", "participant_group"], dropna=False)
-        .agg(participant_par=("trade_amount", "sum"), participant_count=("cusip", "count") if "cusip" in filtered_df.columns else ("trade_amount", "count"))
-        .reset_index()
-        .sort_values(["workbench_maturity_bucket", "trade_size_bucket", "participant_par", "participant_count"], ascending=[True, True, False, False])
-    )
-    dominant = participant.drop_duplicates(["workbench_maturity_bucket", "trade_size_bucket"])[
-        ["workbench_maturity_bucket", "trade_size_bucket", "participant_group"]
-    ]
-    grouped = grouped.merge(dominant, on=["workbench_maturity_bucket", "trade_size_bucket"], how="left")
     grouped = grouped[grouped["workbench_maturity_bucket"].isin([x for x in MATURITY_BUCKETS if x != "All"])]
     grouped = grouped[grouped["trade_size_bucket"].isin([x for x in TRADE_SIZE_BUCKETS if x != "All"])]
     if grouped.empty:
         st.info("No known maturity / trade-size buckets match the selected filters.")
         return
-    size_col = "par_amount" if size_metric == "Par Amount" else "trade_count"
-    fig = px.scatter(
-        grouped,
-        x="workbench_maturity_bucket",
-        y="trade_size_bucket",
-        size=size_col,
-        color="participant_group",
-        category_orders={
-            "workbench_maturity_bucket": [x for x in MATURITY_BUCKETS if x != "All"],
-            "trade_size_bucket": [x for x in TRADE_SIZE_BUCKETS if x != "All"],
-        },
+    metric_col = "par_amount" if metric_label == "Par Amount" else "trade_count"
+    grouped["band_label"] = grouped["workbench_maturity_bucket"].astype(str) + " / " + grouped["trade_size_bucket"].astype(str)
+    grouped["display_value"] = np.where(
+        metric_col == "par_amount",
+        "$" + (grouped[metric_col] / 1_000_000).round(1).astype(str) + "MM",
+        grouped[metric_col].round(0).astype(int).astype(str),
+    )
+    chart_df = grouped.sort_values(metric_col, ascending=False).head(14).sort_values(metric_col, ascending=True)
+    fig = px.bar(
+        chart_df,
+        x=metric_col,
+        y="band_label",
+        orientation="h",
+        color="workbench_maturity_bucket",
+        text="display_value",
         hover_data={
             "workbench_maturity_bucket": True,
             "trade_size_bucket": True,
-            "participant_group": True,
             "par_amount": ":,.0f",
             "trade_count": ":,",
             "average_yield": ":.3f",
             "average_spread_bps": ":.1f",
+            "display_value": False,
         },
         labels={
+            metric_col: metric_label,
+            "band_label": "Maturity / Trade Size",
             "workbench_maturity_bucket": "Maturity Bucket",
             "trade_size_bucket": "Trade Size Bucket",
-            "participant_group": "Dominant Participant",
             "par_amount": "Par Amount",
             "trade_count": "Trade Count",
             "average_yield": "Average Yield",
             "average_spread_bps": "Average Spread",
         },
-        title="Where Filtered Trading Is Concentrated",
-        size_max=48,
+        title=f"Top Activity Bands by {metric_label}",
     )
-    fig.update_layout(height=430, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+    fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_layout(
+        height=430,
+        yaxis=dict(categoryorder="array", categoryarray=chart_df["band_label"].tolist()),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=20, r=70, t=70, b=30),
+    )
     safe_plotly_chart(fig)
 
 
