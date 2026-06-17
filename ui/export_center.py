@@ -11,7 +11,6 @@ from reports.export_center import (
     focused_report_pptx_bytes,
 )
 from reports.reviewer_handoff import reviewer_handoff_markdown
-from ui.analyst_review import render_analyst_review_mode
 from ui.methodology import render_methodology_trust_panel
 
 
@@ -38,7 +37,7 @@ def render_focused_export_methodology(
 ):
     section_anchor("workflow-export-methodology", "Export / Methodology")
     st.markdown(
-        "<div class='focus-band'><b>Review center:</b> approve, export, audit on demand.</div>",
+        "<div class='focus-band'><b>Export center:</b> report, downloads, and methodology audit.</div>",
         unsafe_allow_html=True,
     )
 
@@ -102,8 +101,6 @@ def render_focused_export_methodology(
         st.markdown(f"- {bullet}")
     if context.get("top_candidate_note"):
         st.caption(f"Top candidate read-through: {context['top_candidate_note']}")
-
-    render_analyst_review_mode(context, selected_issuer, safe_dataframe)
 
     with st.expander("Reviewer Handoff", expanded=False):
         st.markdown(handoff_md)
