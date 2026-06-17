@@ -72,7 +72,7 @@ from reports.export_center import (
     focused_core_chart_explanations as _focused_core_chart_explanations,
     focused_methodology_appendix as _focused_methodology_appendix,
 )
-from ui.cusip_detail import (
+from ui.watchlist_state import (
     WATCHLIST_STAGE_OPTIONS,
     _focused_watchlist_dataframe,
     _focused_watchlist_markdown,
@@ -1633,7 +1633,7 @@ def render_advanced_audit_gateway(
         )
 
 
-# Focused watchlist helpers live in ui/cusip_detail.py.
+# Focused watchlist helpers live in ui/watchlist_state.py.
 
 
 def _build_focused_report_context(

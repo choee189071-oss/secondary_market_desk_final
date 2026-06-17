@@ -15,7 +15,6 @@ from engine.scoring import (
     build_workflow_cusip_summary,
     focused_summary_with_peer_gaps,
 )
-from ui.cusip_detail import WATCHLIST_STAGE_OPTIONS, _focused_watchlist_records, _upsert_focused_watchlist
 from ui.common import (
     _fmt_bps,
     _fmt_mm,
@@ -27,6 +26,7 @@ from ui.common import (
     safe_plotly_chart,
     section_anchor,
 )
+from ui.watchlist_state import WATCHLIST_STAGE_OPTIONS, _focused_watchlist_records, _upsert_focused_watchlist
 
 
 MATURITY_BUCKETS = [
