@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -9,7 +10,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from engine.scoring import add_workflow_spread_bps
+from engine.scoring import (
+    add_workflow_spread_bps,
+    build_workflow_cusip_summary,
+    focused_summary_with_peer_gaps,
+)
+from ui.cusip_detail import WATCHLIST_STAGE_OPTIONS, _focused_watchlist_records, _upsert_focused_watchlist
 from ui.common import (
     _fmt_bps,
     _fmt_mm,
@@ -57,6 +63,24 @@ LOT_BUCKETS = ["All", "Odd Lot", "Round Lot", "Block Trade"]
 DATE_RANGE_OPTIONS = ["All", "1 Week", "1 Month", "3 Months", "6 Months", "1 Year", "Custom"]
 
 
+COMMAND_TARGETS = [
+    ("export", "Export / Methodology", "workflow-export-methodology"),
+    ("methodology", "Export / Methodology", "workflow-export-methodology"),
+    ("watch", "RV / Watchlist", "watchlist"),
+    ("curve", "Issuer Curve", "issuer-curve"),
+    ("rv", "RV / Watchlist", "rv-positioning"),
+    ("cusip", "CUSIP Drilldown", "workbench-security-drilldown"),
+    ("security", "CUSIP Drilldown", "workbench-security-drilldown"),
+    ("path", "CUSIP Trade Path", "workbench-security-drilldown"),
+    ("yield", "Yield / Relative Value", "yield-relative-value"),
+    ("spread", "Desk Snapshot", "desk-market-snapshot"),
+    ("chart", "Core Charts", "desk-market-snapshot"),
+    ("snapshot", "Desk Snapshot", "desk-market-snapshot"),
+    ("upload", "Upload / Data Audit", "file-readiness"),
+    ("audit", "Upload / Data Audit", "file-readiness"),
+]
+
+
 @dataclass
 class WorkbenchSelection:
     sector: str
@@ -67,6 +91,43 @@ class WorkbenchSelection:
     trade_size_bucket: str
     trade_type_bucket: str
     lot_bucket: str
+
+
+@dataclass
+class IssuerProfile:
+    issuer: str
+    sector: str
+    row_count: int
+    cusip_count: int
+    total_par: float
+    median_yield: float
+    median_spread_bps: float
+    latest_trade_date: pd.Timestamp | pd.NaT
+    top_maturity: str
+    top_trade_type: str
+    benchmark_source_mode: str
+    benchmark_coverage_pct: float | None
+    cusip_quality_pct: float | None
+    yield_quality_pct: float | None
+
+
+@dataclass
+class SecurityProfile:
+    cusip: str
+    issuer: str
+    signal: str
+    maturity_bucket: str
+    trade_count: int
+    total_par: float
+    latest_trade_date: pd.Timestamp | pd.NaT
+    latest_yield: float
+    latest_price: float
+    current_spread_bps: float
+    liquidity_score: float
+    rv_score: float
+    peer_median_gap_bps: float
+    watchlist_status: str
+    watchlist_note: str
 
 
 def _coerce_date(series: pd.Series) -> pd.Series:
@@ -164,6 +225,10 @@ def _trade_type_category(value: object) -> str:
     if text in {"s", "sell", "sold"}:
         return "Customer Sell"
     return "Other / Unknown"
+
+
+def _normalized_lookup_token(value: object) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", str(value or "").upper())
 
 
 def _participant_group(value: object) -> str:
@@ -328,6 +393,364 @@ def _peer_metrics(df: pd.DataFrame, issuers: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("Trade Volume", ascending=False)
 
 
+def _nonnull_pct(df: pd.DataFrame, col: str) -> float | None:
+    if df.empty or col not in df.columns:
+        return None
+    return float(df[col].notna().mean() * 100)
+
+
+def _numeric_pct(df: pd.DataFrame, col: str) -> float | None:
+    if df.empty or col not in df.columns:
+        return None
+    return float(pd.to_numeric(df[col], errors="coerce").notna().mean() * 100)
+
+
+def _quality_status(rate: float | None, good: float = 90, warn: float = 65) -> str:
+    if rate is None:
+        return "neutral"
+    if rate >= good:
+        return "good"
+    if rate >= warn:
+        return "warn"
+    return "bad"
+
+
+def _fmt_date_short(value: object) -> str:
+    try:
+        dt = pd.to_datetime(value, errors="coerce")
+    except Exception:
+        dt = pd.NaT
+    return "N/A" if pd.isna(dt) else f"{dt:%m/%d/%Y}"
+
+
+def _fmt_rate(value: object) -> str:
+    try:
+        if pd.isna(value):
+            return "N/A"
+        return f"{float(value):.3f}%"
+    except Exception:
+        return "N/A"
+
+
+def _build_cusip_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    return focused_summary_with_peer_gaps(build_workflow_cusip_summary(df))
+
+
+def _best_cusip_for_profile(filtered_df: pd.DataFrame, summary: pd.DataFrame) -> str:
+    current = str(st.session_state.get("workbench_selected_cusip") or "").strip()
+    if current and not filtered_df.empty and "cusip" in filtered_df.columns:
+        available = set(filtered_df["cusip"].dropna().astype(str))
+        if current in available:
+            return current
+    if not summary.empty and "cusip" in summary.columns:
+        return str(summary.iloc[0].get("cusip", ""))
+    return ""
+
+
+def _build_issuer_profile(
+    filtered_df: pd.DataFrame,
+    selection: WorkbenchSelection,
+    benchmark_source_mode: str,
+) -> IssuerProfile:
+    latest_date = pd.NaT
+    if not filtered_df.empty and "trade_date" in filtered_df.columns:
+        latest_date = pd.to_datetime(filtered_df["trade_date"], errors="coerce").dropna().max()
+    benchmark_coverage = _numeric_pct(filtered_df, "active_benchmark_yield")
+    return IssuerProfile(
+        issuer=selection.issuer,
+        sector=selection.sector,
+        row_count=len(filtered_df),
+        cusip_count=filtered_df["cusip"].nunique() if not filtered_df.empty and "cusip" in filtered_df.columns else 0,
+        total_par=float(pd.to_numeric(filtered_df.get("trade_amount"), errors="coerce").sum()) if not filtered_df.empty else 0.0,
+        median_yield=pd.to_numeric(filtered_df.get("yield"), errors="coerce").median() if not filtered_df.empty else np.nan,
+        median_spread_bps=pd.to_numeric(filtered_df.get("spread_bps"), errors="coerce").median() if not filtered_df.empty else np.nan,
+        latest_trade_date=latest_date,
+        top_maturity=_top_bucket(filtered_df, "workbench_maturity_bucket", "trade_count"),
+        top_trade_type=_top_bucket(filtered_df, "trade_type_bucket", "trade_count"),
+        benchmark_source_mode=benchmark_source_mode,
+        benchmark_coverage_pct=benchmark_coverage,
+        cusip_quality_pct=_nonnull_pct(filtered_df, "cusip"),
+        yield_quality_pct=_numeric_pct(filtered_df, "yield"),
+    )
+
+
+def _latest_security_trade(detail_df: pd.DataFrame) -> pd.Series | None:
+    if detail_df.empty or "trade_date" not in detail_df.columns:
+        return None
+    dated = detail_df.copy()
+    dated["trade_date"] = pd.to_datetime(dated["trade_date"], errors="coerce")
+    dated = dated.dropna(subset=["trade_date"]).sort_values("trade_date")
+    return None if dated.empty else dated.iloc[-1]
+
+
+def _build_security_profile(
+    filtered_df: pd.DataFrame,
+    summary: pd.DataFrame,
+    selected_cusip: str,
+    selected_issuer: str,
+) -> SecurityProfile | None:
+    if not selected_cusip or filtered_df.empty or "cusip" not in filtered_df.columns:
+        return None
+
+    detail = filtered_df[filtered_df["cusip"].astype(str) == str(selected_cusip)].copy()
+    if detail.empty:
+        return None
+
+    summary_row = pd.Series(dtype="object")
+    if not summary.empty and "cusip" in summary.columns:
+        hit = summary[summary["cusip"].astype(str) == str(selected_cusip)]
+        if not hit.empty:
+            summary_row = hit.iloc[0]
+
+    latest = _latest_security_trade(detail)
+    records = _focused_watchlist_records()
+    watch_record = records.get(str(selected_cusip), {})
+
+    return SecurityProfile(
+        cusip=str(selected_cusip),
+        issuer=selected_issuer,
+        signal=str(summary_row.get("signal", "Monitor") or "Monitor"),
+        maturity_bucket=str(summary_row.get("maturity_bucket", detail.get("workbench_maturity_bucket", pd.Series(["N/A"])).iloc[0]) or "N/A"),
+        trade_count=int(summary_row.get("trade_count", len(detail)) or len(detail)),
+        total_par=float(summary_row.get("total_trade_amount", pd.to_numeric(detail.get("trade_amount"), errors="coerce").sum()) or 0),
+        latest_trade_date=latest.get("trade_date") if latest is not None else pd.NaT,
+        latest_yield=latest.get("yield") if latest is not None else np.nan,
+        latest_price=latest.get("price") if latest is not None and "price" in latest.index else np.nan,
+        current_spread_bps=summary_row.get("current_spread_bps", pd.to_numeric(detail.get("spread_bps"), errors="coerce").median()),
+        liquidity_score=summary_row.get("liquidity_score", np.nan),
+        rv_score=summary_row.get("rv_score", np.nan),
+        peer_median_gap_bps=summary_row.get("peer_median_gap_bps", np.nan),
+        watchlist_status=str(watch_record.get("status", "Not saved")),
+        watchlist_note=str(watch_record.get("note", "")),
+    )
+
+
+def _render_inspector_css():
+    st.markdown(
+        """
+<style>
+.inspector-panel {
+  position: sticky;
+  top: 0.75rem;
+  background: #ffffff;
+  border: 1px solid #dbe3ee;
+  border-radius: 14px;
+  padding: 14px 14px 12px 14px;
+  margin-top: 2px;
+}
+.inspector-kicker {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.inspector-title {
+  color: #111827;
+  font-size: 1.08rem;
+  font-weight: 820;
+  line-height: 1.18;
+  margin: 4px 0 4px 0;
+  overflow-wrap: anywhere;
+}
+.inspector-subtitle {
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.3;
+  margin-bottom: 10px;
+}
+.inspector-section {
+  border-top: 1px solid #e5eaf2;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+.inspector-section-heading {
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+.inspector-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-left: 4px solid #cbd5e1;
+  padding: 6px 0 6px 8px;
+}
+.inspector-row.status-good { border-left-color: #15803d; }
+.inspector-row.status-warn { border-left-color: #ca8a04; }
+.inspector-row.status-bad { border-left-color: #b91c1c; }
+.inspector-label {
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 720;
+}
+.inspector-value {
+  color: #111827;
+  font-size: 0.82rem;
+  font-weight: 760;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.inspector-chip {
+  display: inline-block;
+  background: #eef8f5;
+  border: 1px solid #b9dcd5;
+  border-radius: 999px;
+  color: #174a43;
+  font-size: 0.76rem;
+  font-weight: 760;
+  padding: 3px 8px;
+  margin: 2px 4px 2px 0;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def _inspector_rows(rows: list[tuple[str, str, str]]) -> str:
+    html = []
+    for label, value, status in rows:
+        html.append(
+            "<div class='inspector-row status-{status}'>"
+            "<div class='inspector-label'>{label}</div>"
+            "<div class='inspector-value'>{value}</div>"
+            "</div>".format(
+                status=_html_escape(status or "neutral"),
+                label=_html_escape(label),
+                value=_html_escape(value),
+            )
+        )
+    return "".join(html)
+
+
+def _render_right_inspector(
+    selection: WorkbenchSelection,
+    issuer_profile: IssuerProfile,
+    security_profile: SecurityProfile | None,
+    summary: pd.DataFrame,
+):
+    object_title = security_profile.cusip if security_profile else issuer_profile.issuer
+    object_subtitle = (
+        f"{security_profile.signal} / {security_profile.maturity_bucket}"
+        if security_profile
+        else f"{issuer_profile.sector} / issuer profile"
+    )
+
+    quality_rows = [
+        ("Benchmark", issuer_profile.benchmark_source_mode, _quality_status(issuer_profile.benchmark_coverage_pct, good=80, warn=40)),
+        ("Benchmark coverage", "N/A" if issuer_profile.benchmark_coverage_pct is None else f"{issuer_profile.benchmark_coverage_pct:.1f}%", _quality_status(issuer_profile.benchmark_coverage_pct, good=80, warn=40)),
+        ("CUSIP quality", "N/A" if issuer_profile.cusip_quality_pct is None else f"{issuer_profile.cusip_quality_pct:.1f}%", _quality_status(issuer_profile.cusip_quality_pct, good=95, warn=80)),
+        ("Yield quality", "N/A" if issuer_profile.yield_quality_pct is None else f"{issuer_profile.yield_quality_pct:.1f}%", _quality_status(issuer_profile.yield_quality_pct, good=90, warn=70)),
+    ]
+    issuer_rows = [
+        ("Issuer", issuer_profile.issuer, "neutral"),
+        ("Rows / CUSIPs", f"{issuer_profile.row_count:,} / {issuer_profile.cusip_count:,}", "neutral"),
+        ("Par", _fmt_mm(issuer_profile.total_par), "neutral"),
+        ("Median spread", _fmt_bps(issuer_profile.median_spread_bps), "neutral"),
+        ("Median yield", _fmt_rate(issuer_profile.median_yield), "neutral"),
+        ("Latest trade", _fmt_date_short(issuer_profile.latest_trade_date), "neutral"),
+        ("Top maturity", issuer_profile.top_maturity, "neutral"),
+        ("Top type", issuer_profile.top_trade_type, "neutral"),
+    ]
+
+    security_rows: list[tuple[str, str, str]] = []
+    if security_profile:
+        security_rows = [
+            ("CUSIP", security_profile.cusip, "neutral"),
+            ("Watchlist", security_profile.watchlist_status, "good" if security_profile.watchlist_status != "Not saved" else "neutral"),
+            ("Spread", _fmt_bps(security_profile.current_spread_bps), "neutral"),
+            ("Peer gap", _fmt_bps(security_profile.peer_median_gap_bps), "neutral"),
+            ("Liquidity", _fmt_num(security_profile.liquidity_score), "neutral"),
+            ("RV", _fmt_num(security_profile.rv_score), "neutral"),
+            ("Trades", f"{security_profile.trade_count:,}", "neutral"),
+            ("Par", _fmt_mm(security_profile.total_par), "neutral"),
+            ("Latest trade", _fmt_date_short(security_profile.latest_trade_date), "neutral"),
+            ("Latest yield", _fmt_rate(security_profile.latest_yield), "neutral"),
+            ("Latest price", _fmt_num(security_profile.latest_price), "neutral"),
+        ]
+
+    st.markdown(
+        f"""
+<div class="inspector-panel">
+  <div class="inspector-kicker">Right-Side Inspector</div>
+  <div class="inspector-title">{_html_escape(object_title)}</div>
+  <div class="inspector-subtitle">{_html_escape(object_subtitle)}</div>
+  <span class="inspector-chip">Issuer object</span>
+  <span class="inspector-chip">CUSIP object</span>
+  <span class="inspector-chip">Benchmark evidence</span>
+  <div class="inspector-section">
+    <div class="inspector-section-heading">Data Quality</div>
+    {_inspector_rows(quality_rows)}
+  </div>
+  <div class="inspector-section">
+    <div class="inspector-section-heading">Issuer Profile</div>
+    {_inspector_rows(issuer_rows)}
+  </div>
+  <div class="inspector-section">
+    <div class="inspector-section-heading">Security Profile</div>
+    {_inspector_rows(security_rows) if security_rows else "<div class='inspector-subtitle'>Select a CUSIP in Security Drilldown or command bar.</div>"}
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    note_key = f"workbench_inspector_note_{selection.issuer}_{security_profile.cusip if security_profile else 'issuer'}"
+    existing_note = security_profile.watchlist_note if security_profile else st.session_state.get(note_key, "")
+    note = st.text_area(
+        "Inspector note",
+        value=existing_note,
+        key=note_key,
+        height=92,
+        placeholder="Analyst note, evidence check, or next question.",
+    )
+    if security_profile:
+        c1, c2 = st.columns(2)
+        status_options = WATCHLIST_STAGE_OPTIONS
+        current_status = security_profile.watchlist_status if security_profile.watchlist_status in status_options else "New"
+        with c1:
+            status = st.selectbox(
+                "Status",
+                status_options,
+                index=status_options.index(current_status),
+                key=f"workbench_inspector_status_{security_profile.cusip}",
+            )
+        with c2:
+            next_step = st.text_input(
+                "Next",
+                key=f"workbench_inspector_next_{security_profile.cusip}",
+                placeholder="Verify / call / monitor",
+            )
+        if st.button("Save CUSIP", key=f"workbench_inspector_save_{security_profile.cusip}"):
+            row_match = summary[summary["cusip"].astype(str) == str(security_profile.cusip)] if not summary.empty and "cusip" in summary.columns else pd.DataFrame()
+            row = row_match.iloc[0] if not row_match.empty else {
+                "cusip": security_profile.cusip,
+                "signal": security_profile.signal,
+                "maturity_bucket": security_profile.maturity_bucket,
+                "current_spread_bps": security_profile.current_spread_bps,
+                "liquidity_score": security_profile.liquidity_score,
+                "rv_score": security_profile.rv_score,
+                "trade_count": security_profile.trade_count,
+                "total_trade_amount": security_profile.total_par,
+                "latest_trade": security_profile.latest_trade_date,
+            }
+            _upsert_focused_watchlist(
+                security_profile.cusip,
+                selection.issuer,
+                "Right-Side Inspector",
+                row,
+                note,
+                status=status,
+                reason=security_profile.signal,
+                next_step=next_step,
+            )
+            st.success(f"Saved {security_profile.cusip}.")
+
+
 def _active_filter_summary(selection: WorkbenchSelection):
     date_text = selection.date_range_label
     if selection.date_range is not None:
@@ -348,6 +771,178 @@ def _active_filter_summary(selection: WorkbenchSelection):
             for k, v in summary_items
         ]
     )
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+def _command_target(command: str) -> tuple[str, str] | tuple[None, None]:
+    lower = command.lower()
+    for token, label, anchor in COMMAND_TARGETS:
+        if token in lower:
+            return label, anchor
+    return None, None
+
+
+def _find_command_cusip(command: str, prepared_df: pd.DataFrame) -> str | None:
+    if prepared_df.empty or "cusip" not in prepared_df.columns:
+        return None
+    command_token = _normalized_lookup_token(command)
+    if len(command_token) < 6:
+        return None
+    candidates = prepared_df["cusip"].dropna().astype(str).unique().tolist()
+    normalized = {_normalized_lookup_token(c): c for c in candidates}
+    if command_token in normalized:
+        return str(normalized[command_token])
+    for token, cusip in normalized.items():
+        if len(token) >= 6 and token in command_token:
+            return str(cusip)
+    return None
+
+
+def _find_command_issuer(command: str, issuer_options: list[str]) -> str | None:
+    lower = command.lower().strip()
+    exact = [issuer for issuer in issuer_options if lower == issuer.lower()]
+    if exact:
+        return exact[0]
+    contained = [issuer for issuer in issuer_options if issuer.lower() in lower]
+    if contained:
+        return sorted(contained, key=len, reverse=True)[0]
+    token = _normalized_lookup_token(command)
+    normalized = {_normalized_lookup_token(issuer): issuer for issuer in issuer_options}
+    if token in normalized:
+        return normalized[token]
+    contained_norm = [issuer for norm, issuer in normalized.items() if norm and norm in token]
+    if contained_norm:
+        return sorted(contained_norm, key=len, reverse=True)[0]
+    return None
+
+
+def _sector_for_issuer(prepared_df: pd.DataFrame, issuer: str) -> str:
+    if "sector" not in prepared_df.columns:
+        return "All"
+    values = (
+        prepared_df.loc[prepared_df["issuer"].astype(str) == str(issuer), "sector"]
+        .dropna()
+        .astype(str)
+        .tolist()
+    )
+    values = [v for v in values if v and v.lower() != "nan"]
+    return values[0] if values else "All"
+
+
+def _apply_workbench_command(command: str, prepared_df: pd.DataFrame) -> dict:
+    issuer_options = sorted(prepared_df["issuer"].dropna().astype(str).unique().tolist())
+    target_label, target_anchor = _command_target(command)
+    selected_cusip = _find_command_cusip(command, prepared_df)
+    selected_issuer = None
+    message = ""
+
+    if selected_cusip:
+        rows = prepared_df[prepared_df["cusip"].astype(str) == str(selected_cusip)]
+        if not rows.empty and "issuer" in rows.columns:
+            selected_issuer = str(rows["issuer"].iloc[0])
+        st.session_state["workbench_selected_cusip"] = selected_cusip
+        if selected_issuer:
+            st.session_state["workbench_selected_issuer"] = selected_issuer
+            st.session_state["workbench_selected_sector"] = _sector_for_issuer(prepared_df, selected_issuer)
+        target_label = target_label or "CUSIP Drilldown"
+        target_anchor = target_anchor or "workbench-security-drilldown"
+        message = f"Selected CUSIP {selected_cusip}" + (f" under {selected_issuer}" if selected_issuer else "")
+    else:
+        selected_issuer = _find_command_issuer(command, issuer_options)
+        if selected_issuer:
+            st.session_state["workbench_selected_issuer"] = selected_issuer
+            st.session_state["workbench_selected_sector"] = _sector_for_issuer(prepared_df, selected_issuer)
+            if "cusip" in prepared_df.columns:
+                current_cusip = st.session_state.get("workbench_selected_cusip")
+                if current_cusip:
+                    issuer_cusips = set(
+                        prepared_df.loc[prepared_df["issuer"].astype(str) == str(selected_issuer), "cusip"]
+                        .dropna()
+                        .astype(str)
+                    )
+                    if str(current_cusip) not in issuer_cusips:
+                        st.session_state["workbench_selected_cusip"] = ""
+            target_label = target_label or "Desk Snapshot"
+            target_anchor = target_anchor or "desk-market-snapshot"
+            message = f"Selected issuer {selected_issuer}"
+
+    if not message and target_anchor:
+        message = f"Ready to jump to {target_label}"
+    if not message:
+        message = "No issuer, CUSIP, or section matched that command."
+
+    return {
+        "message": message,
+        "target_label": target_label,
+        "target_anchor": target_anchor,
+        "issuer": selected_issuer,
+        "cusip": selected_cusip,
+    }
+
+
+def _render_workbench_command_bar(prepared_df: pd.DataFrame):
+    section_anchor("workbench-command", "Workbench Command")
+    st.markdown(
+        "<div class='focus-band'><b>Command:</b> type an issuer, CUSIP, or section keyword such as <code>LADWP curve</code>, <code>544532NV2</code>, <code>watchlist</code>, or <code>export</code>.</div>",
+        unsafe_allow_html=True,
+    )
+    with st.form("workbench_command_form", clear_on_submit=False):
+        c1, c2 = st.columns([0.78, 0.22])
+        with c1:
+            command = st.text_input(
+                "Command / Search",
+                key="workbench_command_input",
+                placeholder="Issuer, CUSIP, chart, curve, watchlist, export...",
+                label_visibility="collapsed",
+            )
+        with c2:
+            submitted = st.form_submit_button("Go")
+    if submitted:
+        st.session_state["workbench_command_feedback"] = _apply_workbench_command(command, prepared_df)
+
+    feedback = st.session_state.get("workbench_command_feedback")
+    if isinstance(feedback, dict) and feedback.get("message"):
+        target_anchor = feedback.get("target_anchor")
+        target_html = ""
+        if target_anchor:
+            target_html = f" | <a href='#{_html_escape(target_anchor)}'>Open {_html_escape(feedback.get('target_label') or 'target')}</a>"
+        st.markdown(
+            f"<div class='object-command-result'>{_html_escape(feedback.get('message'))}{target_html}</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _date_range_text(selection: WorkbenchSelection) -> str:
+    if selection.date_range is None:
+        return selection.date_range_label
+    return f"{selection.date_range[0]:%m/%d/%Y} - {selection.date_range[1]:%m/%d/%Y}"
+
+
+def _render_object_status_bar(
+    selection: WorkbenchSelection,
+    filtered_df: pd.DataFrame,
+    benchmark_source_mode: str,
+):
+    selected_cusip = st.session_state.get("workbench_selected_cusip") or "No CUSIP selected"
+    total_par = float(pd.to_numeric(filtered_df.get("trade_amount"), errors="coerce").sum()) if not filtered_df.empty else 0.0
+    cusip_count = filtered_df["cusip"].nunique() if not filtered_df.empty and "cusip" in filtered_df.columns else 0
+    median_spread = pd.to_numeric(filtered_df.get("spread_bps"), errors="coerce").median() if not filtered_df.empty else np.nan
+    items = [
+        ("Issuer", selection.issuer),
+        ("CUSIP", selected_cusip),
+        ("Date", _date_range_text(selection)),
+        ("Maturity", selection.maturity_bucket),
+        ("Benchmark", benchmark_source_mode),
+        ("Rows / CUSIPs", f"{len(filtered_df):,} / {cusip_count:,}"),
+        ("Par", _fmt_mm(total_par)),
+        ("Median Spread", _fmt_bps(median_spread)),
+    ]
+    parts = ["<div class='object-status-grid'>"]
+    for label, value in items:
+        parts.append(
+            f"<div class='object-status-item'><div class='object-status-label'>{_html_escape(label)}</div><div class='object-status-value'>{_html_escape(value)}</div></div>"
+        )
     parts.append("</div>")
     st.markdown("".join(parts), unsafe_allow_html=True)
 
@@ -617,7 +1212,13 @@ def _render_security_drilldown(filtered_df: pd.DataFrame) -> pd.DataFrame:
     ]
     safe_dataframe(detail[display_cols] if display_cols else detail, hide_index=True, top_rows=15)
     if not detail.empty:
-        selected_cusip = st.selectbox("CUSIP path", detail["cusip"].astype(str).tolist())
+        cusip_options = detail["cusip"].astype(str).tolist()
+        current_cusip = str(st.session_state.get("workbench_selected_cusip") or "")
+        default_idx = cusip_options.index(current_cusip) if current_cusip in cusip_options else 0
+        if st.session_state.get("workbench_security_path_select") not in cusip_options:
+            st.session_state["workbench_security_path_select"] = cusip_options[default_idx]
+        selected_cusip = st.selectbox("CUSIP path", cusip_options, index=default_idx, key="workbench_security_path_select")
+        st.session_state["workbench_selected_cusip"] = selected_cusip
         path = drill_df[drill_df["cusip"].astype(str) == str(selected_cusip)].copy()
         path = path.sort_values("trade_date")
         if not path.empty and "trade_date" in path.columns:
@@ -756,24 +1357,65 @@ def render_trading_workbench(
         st.info("No usable trade rows are available for the trading workbench.")
         return {}
 
-    section_anchor("workbench-issuer-selection", "1. Issuer Selection")
+    _render_inspector_css()
+    _render_workbench_command_bar(prepared)
+
+    section_anchor("workbench-issuer-selection", "1. Workbench Lens")
     st.markdown(
-        "<div class='focus-band'><b>Goal:</b> set the issuer, sector, and date lens before looking at trading activity.</div>",
+        "<div class='focus-band'><b>Lens:</b> one object and one filter scope drive every chart, table, CUSIP drilldown, RV view, and export below.</div>",
         unsafe_allow_html=True,
     )
     sector_options = ["All"] + sorted([x for x in prepared["sector"].dropna().astype(str).unique().tolist() if x and x != "nan"])
+    all_issuer_options = sorted(prepared["issuer"].dropna().astype(str).unique().tolist())
+    desired_sector = st.session_state.get("workbench_selected_sector", "All")
+    desired_issuer = st.session_state.get("workbench_selected_issuer")
+    if desired_sector not in sector_options:
+        st.session_state["workbench_selected_sector"] = "All"
+        desired_sector = "All"
+    if desired_issuer in all_issuer_options and desired_sector != "All":
+        issuers_in_sector = set(prepared.loc[prepared["sector"].astype(str) == str(desired_sector), "issuer"].astype(str))
+        if str(desired_issuer) not in issuers_in_sector:
+            st.session_state["workbench_selected_sector"] = "All"
+            desired_sector = "All"
+
     c1, c2, c3 = st.columns([0.28, 0.34, 0.38])
     with c1:
-        selected_sector = st.selectbox("Sector", sector_options)
+        selected_sector = st.selectbox(
+            "Sector",
+            sector_options,
+            index=sector_options.index(desired_sector),
+            key="workbench_selected_sector",
+        )
     issuer_pool = prepared if selected_sector == "All" else prepared[prepared["sector"].astype(str) == selected_sector]
     issuer_options = sorted(issuer_pool["issuer"].dropna().astype(str).unique().tolist())
     if not issuer_options:
-        issuer_options = sorted(prepared["issuer"].dropna().astype(str).unique().tolist())
+        issuer_options = all_issuer_options
+    if st.session_state.get("workbench_selected_issuer") not in issuer_options:
+        st.session_state["workbench_selected_issuer"] = issuer_options[0] if issuer_options else ""
     with c2:
-        selected_issuer = st.selectbox("Issuer", issuer_options)
+        selected_issuer = st.selectbox(
+            "Issuer",
+            issuer_options,
+            index=issuer_options.index(st.session_state.get("workbench_selected_issuer")) if st.session_state.get("workbench_selected_issuer") in issuer_options else 0,
+            key="workbench_selected_issuer",
+        )
     issuer_base = prepared[prepared["issuer"].astype(str) == selected_issuer].copy()
+    current_cusip = st.session_state.get("workbench_selected_cusip")
+    if current_cusip and "cusip" in issuer_base.columns:
+        issuer_cusips = set(issuer_base["cusip"].dropna().astype(str))
+        if str(current_cusip) not in issuer_cusips:
+            st.session_state["workbench_selected_cusip"] = ""
     with c3:
-        date_option = st.selectbox("Date Range", DATE_RANGE_OPTIONS, index=5)
+        desired_date = st.session_state.get("workbench_date_range_label", "1 Year")
+        if desired_date not in DATE_RANGE_OPTIONS:
+            desired_date = "1 Year"
+            st.session_state["workbench_date_range_label"] = desired_date
+        date_option = st.selectbox(
+            "Date Range",
+            DATE_RANGE_OPTIONS,
+            index=DATE_RANGE_OPTIONS.index(desired_date),
+            key="workbench_date_range_label",
+        )
     date_range = _date_range_for_option(issuer_base, date_option)
     if date_option == "Custom":
         dates = pd.to_datetime(issuer_base["trade_date"], errors="coerce").dropna()
@@ -790,14 +1432,23 @@ def render_trading_workbench(
     section_anchor("workbench-trading-filters", "2. Trading Filters")
     f1, f2, f3, f4 = st.columns(4)
     with f1:
-        maturity_bucket = st.selectbox("Maturity Filters", MATURITY_BUCKETS)
+        if st.session_state.get("workbench_maturity_bucket") not in MATURITY_BUCKETS:
+            st.session_state["workbench_maturity_bucket"] = "All"
+        maturity_bucket = st.selectbox("Maturity Filters", MATURITY_BUCKETS, key="workbench_maturity_bucket")
     with f2:
-        trade_size_bucket = st.selectbox("Trade Size Filters", TRADE_SIZE_BUCKETS)
+        if st.session_state.get("workbench_trade_size_bucket") not in TRADE_SIZE_BUCKETS:
+            st.session_state["workbench_trade_size_bucket"] = "All"
+        trade_size_bucket = st.selectbox("Trade Size Filters", TRADE_SIZE_BUCKETS, key="workbench_trade_size_bucket")
     with f3:
         observed_types = [x for x in TRADE_TYPE_BUCKETS if x == "All" or x in issuer_base["trade_type_bucket"].unique()]
-        trade_type_bucket = st.selectbox("Trade Type Filters", observed_types or TRADE_TYPE_BUCKETS)
+        trade_type_options = observed_types or TRADE_TYPE_BUCKETS
+        if st.session_state.get("workbench_trade_type_bucket") not in trade_type_options:
+            st.session_state["workbench_trade_type_bucket"] = "All"
+        trade_type_bucket = st.selectbox("Trade Type Filters", trade_type_options, key="workbench_trade_type_bucket")
     with f4:
-        lot_bucket = st.selectbox("Lot / Block Filter", LOT_BUCKETS)
+        if st.session_state.get("workbench_lot_bucket") not in LOT_BUCKETS:
+            st.session_state["workbench_lot_bucket"] = "All"
+        lot_bucket = st.selectbox("Lot / Block Filter", LOT_BUCKETS, key="workbench_lot_bucket")
 
     selection = WorkbenchSelection(
         sector=selected_sector,
@@ -811,26 +1462,41 @@ def render_trading_workbench(
     )
     filtered_universe = _apply_workbench_filters(prepared, selection, issuer=None)
     filtered_issuer = _apply_workbench_filters(prepared, selection, issuer=selected_issuer)
-    _active_filter_summary(selection)
-    _render_summary_cards(filtered_issuer)
+    cusip_summary = _build_cusip_summary(filtered_issuer)
+    selected_cusip = _best_cusip_for_profile(filtered_issuer, cusip_summary)
+    if selected_cusip:
+        st.session_state["workbench_selected_cusip"] = selected_cusip
 
-    section_anchor("workbench-market-analytics", "3. Market Analytics")
-    st.caption(f"Benchmark source retained for spread calculations: {benchmark_source_mode}. Trading analysis is driven by the uploaded trade tape.")
-    _render_volume_overview(filtered_issuer)
-    a1, a2 = st.columns([0.52, 0.48])
-    with a1:
-        _render_activity_concentration_map(filtered_issuer)
-    with a2:
-        _render_participation(filtered_issuer)
-    _render_liquidity_dashboard(filtered_issuer)
+    left_col, right_col = st.columns([0.74, 0.26], gap="large")
+    with left_col:
+        _render_object_status_bar(selection, filtered_issuer, benchmark_source_mode)
+        _active_filter_summary(selection)
+        _render_summary_cards(filtered_issuer)
 
-    security_detail = _render_security_drilldown(filtered_issuer)
-    peer_metrics, peer_issuers = _render_peer_comparison(prepared, selection, filtered_issuer)
+        section_anchor("workbench-market-analytics", "3. Market Analytics")
+        st.caption(f"Benchmark source retained for spread calculations: {benchmark_source_mode}. Trading analysis is driven by the uploaded trade tape.")
+        _render_volume_overview(filtered_issuer)
+        a1, a2 = st.columns([0.52, 0.48])
+        with a1:
+            _render_activity_concentration_map(filtered_issuer)
+        with a2:
+            _render_participation(filtered_issuer)
+        _render_liquidity_dashboard(filtered_issuer)
 
-    section_anchor("workbench-narrative-insights", "5B. Narrative Read-Through")
-    observations = _build_narrative(filtered_issuer, security_detail, selection)
-    for obs in observations:
-        st.markdown(f"<div class='methodology-note'>{_html_escape(obs)}</div>", unsafe_allow_html=True)
+        security_detail = _render_security_drilldown(filtered_issuer)
+        cusip_summary = _build_cusip_summary(filtered_issuer)
+        peer_metrics, peer_issuers = _render_peer_comparison(prepared, selection, filtered_issuer)
+
+        section_anchor("workbench-narrative-insights", "5B. Narrative Read-Through")
+        observations = _build_narrative(filtered_issuer, security_detail, selection)
+        for obs in observations:
+            st.markdown(f"<div class='methodology-note'>{_html_escape(obs)}</div>", unsafe_allow_html=True)
+
+    selected_cusip = _best_cusip_for_profile(filtered_issuer, cusip_summary)
+    issuer_profile = _build_issuer_profile(filtered_issuer, selection, benchmark_source_mode)
+    security_profile = _build_security_profile(filtered_issuer, cusip_summary, selected_cusip, selected_issuer)
+    with right_col:
+        _render_right_inspector(selection, issuer_profile, security_profile, cusip_summary)
 
     return {
         "selection": selection,
@@ -838,9 +1504,13 @@ def render_trading_workbench(
         "filtered_universe_df": filtered_universe,
         "filtered_issuer_df": filtered_issuer,
         "security_detail_df": security_detail,
+        "cusip_summary_df": cusip_summary,
+        "issuer_profile": issuer_profile,
+        "security_profile": security_profile,
         "peer_metrics_df": peer_metrics,
         "observations": observations,
         "selected_issuer": selected_issuer,
+        "selected_cusip": selected_cusip,
         "selected_sector": selected_sector,
         "peer_issuers": peer_issuers,
         "filtered_rows": len(filtered_issuer),

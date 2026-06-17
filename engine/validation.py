@@ -36,6 +36,12 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "index_rate": ["index rate", "index_rate", "benchmark rate"],
     "spread": ["spread", "g spread", "z spread", "spread to benchmark"],
     "trade_type": ["trade type", "trade_type", "side", "buy/sell"],
+    "1Y": ["1y", "1 yr", "1 year", "1-year", "1-yr"],
+    "2Y": ["2y", "2 yr", "2 year", "2-year", "2-yr"],
+    "5Y": ["5y", "5 yr", "5 year", "5-year", "5-yr"],
+    "10Y": ["10y", "10 yr", "10 year", "10-year", "10-yr"],
+    "20Y": ["20y", "20 yr", "20 year", "20-year", "20-yr"],
+    "30Y": ["30y", "30 yr", "30 year", "30-year", "30-yr"],
 }
 
 BOND_REQUIRED = ["cusip", "issuer", "maturity"]

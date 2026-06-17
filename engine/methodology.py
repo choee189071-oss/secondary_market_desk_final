@@ -65,7 +65,7 @@ def methodology_evidence_summary(
     """Compact evidence layer used consistently across workflow pages."""
     issuer_df = issuer_df if isinstance(issuer_df, pd.DataFrame) and not issuer_df.empty else market_df
     benchmark_source = benchmark_source_mode or "No active benchmark"
-    benchmark_status = "good" if benchmark_source in {"Trade Sheet Index / Index Rate", "Uploaded MMD fallback"} else "bad"
+    benchmark_status = "good" if benchmark_source in {"Uploaded MMD / AAA Curve", "Trade Sheet Index / Index Rate"} else "bad"
 
     yield_col = _first_existing_col(issuer_df, ["yield", "yield_percent", "trade_yield"])
     index_col = _first_existing_col(issuer_df, ["index_rate", "index yield", "index_yield"])
@@ -184,7 +184,7 @@ def methodology_trust_layers(
     benchmark_rows = [
         {
             "Topic": "Benchmark hierarchy",
-            "Current policy": benchmark_priority or "Trade Sheet Index / Index Rate first; uploaded MMD fallback second",
+            "Current policy": benchmark_priority or "Uploaded MMD / AAA Curve first; trade-sheet Index / Index Rate fallback second",
             "Why it matters": "Prevents mixing two curve sources with different dates, tenors, and rounding conventions.",
             "Analyst validation question": "Is this the benchmark source the desk expects for this issuer/date window?",
         },
@@ -192,17 +192,17 @@ def methodology_trust_layers(
             "Topic": "Active benchmark source",
             "Current policy": benchmark_source_mode or "Unknown",
             "Why it matters": "Every spread/RV conclusion must disclose which benchmark produced the spread.",
-            "Analyst validation question": "Do the displayed spreads reconcile to the uploaded trade Index Rate or approved MMD file?",
+            "Analyst validation question": "Do the displayed spreads reconcile to the approved uploaded MMD file or documented fallback source?",
         },
         {
             "Topic": "MMD treatment",
-            "Current policy": "Uploaded MMD is treated as AAA and used only when external MMD fallback is active.",
+            "Current policy": "Uploaded MMD is treated as the primary AAA benchmark curve when provided.",
             "Why it matters": "Rating, sector, liquidity, and callable effects remain separate from the benchmark curve.",
             "Analyst validation question": "Is the uploaded MMD file the correct AAA curve for this analysis date range?",
         },
         {
             "Topic": "Conflict policy",
-            "Current policy": benchmark_conflict_policy or "Do not blend trade-sheet Index Rate and uploaded MMD in one run.",
+            "Current policy": benchmark_conflict_policy or "Do not blend uploaded MMD and trade-sheet Index Rate in one run.",
             "Why it matters": "Blended benchmarks can create false spread movement or peer gaps.",
             "Analyst validation question": "Should any exception to the no-mixing rule be documented?",
         },
@@ -243,8 +243,8 @@ def methodology_trust_layers(
         },
         {
             "Missing / weak input": "Index Rate",
-            "Fallback": "Use uploaded MMD only when external MMD fallback is enabled and active.",
-            "Disclosure": "Spread/RV views are degraded if neither source is available.",
+            "Fallback": "Use trade-sheet Index / Index Rate only when no usable uploaded MMD was provided.",
+            "Disclosure": "Uploaded MMD is the primary AAA benchmark; Index Rate is fallback/audit evidence.",
         },
         {
             "Missing / weak input": "CUSIP",

@@ -18,6 +18,7 @@ from engine.benchmark import (
     MATURITY_BUCKET_RENAME,
     MAX_MATURITY_YEAR,
     detect_mmd_date_column,
+    make_benchmark_long,
 )
 from engine.validation import normalize_col_name
 
@@ -218,8 +219,119 @@ def build_benchmark_curve_from_trade_index(market_df: pd.DataFrame) -> pd.DataFr
         if tenor in wide.columns:
             wide[f"AAA_{tenor}"] = wide[tenor]
 
-    wide.attrs["benchmark_source_mode"] = "Trade Index / Index Rate"
+    wide.attrs["benchmark_source_mode"] = "Trade Sheet Index / Index Rate"
     return wide.sort_values("Date").reset_index(drop=True)
+
+
+def derive_source_spread_bps(df: pd.DataFrame) -> pd.Series:
+    """Preserve source trade spread before active benchmark governance is applied."""
+    if df is None or df.empty:
+        return pd.Series(dtype="float64")
+
+    if "spread_bps" in df.columns:
+        return pd.to_numeric(df["spread_bps"], errors="coerce")
+
+    if "spread" in df.columns and pd.to_numeric(df["spread"], errors="coerce").notna().any():
+        raw = pd.to_numeric(df["spread"], errors="coerce")
+        median_abs = raw.abs().dropna().median()
+        return raw * 100 if pd.notna(median_abs) and median_abs <= 10 else raw
+
+    if {"yield", "index_rate"}.issubset(df.columns):
+        return (
+            pd.to_numeric(df["yield"], errors="coerce")
+            - pd.to_numeric(df["index_rate"], errors="coerce")
+        ) * 100
+
+    return pd.Series(pd.NA, index=df.index, dtype="Float64")
+
+
+def attach_active_benchmark_spreads(
+    market_df: pd.DataFrame,
+    mmd_df: pd.DataFrame,
+    benchmark_source_mode: str,
+) -> pd.DataFrame:
+    """Attach the governed benchmark spread used by workflow charts and RV scoring."""
+    if market_df is None or market_df.empty:
+        return market_df
+
+    out = market_df.copy()
+    out["source_spread_bps"] = derive_source_spread_bps(out)
+    out["active_benchmark_yield"] = pd.NA
+    out["active_benchmark_source"] = pd.NA
+    out["active_benchmark_tenor"] = pd.NA
+    out["active_benchmark_rating"] = "AAA"
+    out["benchmark_spread_bps"] = pd.NA
+
+    required_cols = {"trade_date", "maturity_bucket", "yield"}
+    if (
+        mmd_df is None
+        or mmd_df.empty
+        or not required_cols.issubset(set(out.columns))
+    ):
+        out["spread_bps"] = out["source_spread_bps"]
+        out["spread_bps_source"] = "Source spread / trade Index Rate"
+        return out
+
+    benchmark_long = make_benchmark_long(mmd_df, "AAA")
+    if benchmark_long.empty:
+        out["spread_bps"] = out["source_spread_bps"]
+        out["spread_bps_source"] = "Source spread / trade Index Rate"
+        return out
+
+    benchmark_cols = [
+        "trade_date",
+        "maturity_bucket",
+        "benchmark_yield",
+        "benchmark_source",
+        "mmd_tenor",
+        "benchmark_rating",
+    ]
+    benchmark_lookup = benchmark_long[[c for c in benchmark_cols if c in benchmark_long.columns]].copy()
+    benchmark_lookup["trade_date"] = pd.to_datetime(benchmark_lookup["trade_date"], errors="coerce").dt.normalize()
+    benchmark_lookup = benchmark_lookup.dropna(subset=["trade_date", "maturity_bucket", "benchmark_yield"])
+    benchmark_lookup = benchmark_lookup.drop_duplicates(["trade_date", "maturity_bucket"], keep="last")
+
+    working = out.copy()
+    working["_row_id"] = np.arange(len(working))
+    working["trade_date"] = pd.to_datetime(working["trade_date"], errors="coerce").dt.normalize()
+    merged = working.merge(
+        benchmark_lookup,
+        on=["trade_date", "maturity_bucket"],
+        how="left",
+        suffixes=("", "_active"),
+    )
+    merged = merged.sort_values("_row_id").drop(columns=["_row_id"])
+
+    merged["active_benchmark_yield"] = pd.to_numeric(merged.get("benchmark_yield"), errors="coerce")
+    merged["active_benchmark_source"] = merged.get("benchmark_source")
+    merged["active_benchmark_tenor"] = merged.get("mmd_tenor")
+    merged["active_benchmark_rating"] = merged.get("benchmark_rating", "AAA")
+    merged["benchmark_spread_bps"] = (
+        pd.to_numeric(merged.get("yield"), errors="coerce")
+        - pd.to_numeric(merged["active_benchmark_yield"], errors="coerce")
+    ) * 100
+
+    benchmark_spread = pd.to_numeric(merged["benchmark_spread_bps"], errors="coerce")
+    source_spread = pd.to_numeric(merged["source_spread_bps"], errors="coerce")
+    if benchmark_source_mode == "Uploaded MMD / AAA Curve":
+        merged["spread_bps"] = benchmark_spread
+        merged["spread_bps_source"] = np.where(
+            benchmark_spread.notna(),
+            "Uploaded MMD / AAA Curve",
+            "Unavailable - uploaded MMD date/tenor gap",
+        )
+    elif benchmark_source_mode == "Trade Sheet Index / Index Rate":
+        merged["spread_bps"] = benchmark_spread.combine_first(source_spread)
+        merged["spread_bps_source"] = np.where(
+            benchmark_spread.notna(),
+            "Trade Sheet Index / Index Rate",
+            "Source spread / trade Index Rate",
+        )
+    else:
+        merged["spread_bps"] = source_spread
+        merged["spread_bps_source"] = "Source spread / trade Index Rate"
+
+    return merged.drop(columns=["benchmark_yield", "benchmark_source", "mmd_tenor", "benchmark_rating"], errors="ignore")
 
 
 @st.cache_data(show_spinner=False, max_entries=32)
@@ -305,9 +417,12 @@ def is_date_like_col(col: object) -> bool:
 
 
 def is_mmd_tenor_col(col: object, max_year: int = MMD_MAX_TENOR_YEAR) -> bool:
-    """Return True for tenor columns like 1Y, 01Y, AAA_10Y, MMD 30Y."""
+    """Return True for tenor columns like 1Y, 1-Yr, 01Y, AAA_10Y, MMD 30Y."""
     text = str(col).strip().upper()
-    match = re.search(r"(?:^|[^0-9])0?([1-9]|[1-3][0-9]|40)\s*Y(?:[^0-9]|$)", text)
+    match = re.search(
+        r"(?:^|[^0-9])0?([1-9]|[1-3][0-9]|40)\s*[-_ ]?\s*(?:Y|YR|YEAR|YEARS)(?:[^0-9]|$)",
+        text,
+    )
     if not match:
         return False
     year = int(match.group(1))
@@ -348,7 +463,7 @@ def read_external_mmd_fallback_file(
     payload: bytes,
     lookback_years: int = MMD_FALLBACK_LOOKBACK_YEARS,
 ) -> pd.DataFrame:
-    """Memory-aware MMD reader used only when external MMD fallback is enabled."""
+    """Memory-aware MMD reader for the uploaded AAA benchmark curve."""
     suffix = Path(file_name).suffix.lower()
 
     if suffix == ".csv":
@@ -438,7 +553,7 @@ def process_uploads(
     trade_index_curve_df = build_benchmark_curve_from_trade_index(market_df)
 
     uploaded_mmd_df = pd.DataFrame()
-    if mmd_payload is not None and trade_index_curve_df.empty:
+    if mmd_payload is not None:
         name, payload = mmd_payload
         uploaded_mmd_df = read_external_mmd_fallback_file(
             file_name=name,
@@ -449,18 +564,30 @@ def process_uploads(
     trade_index_available = not trade_index_curve_df.empty
     uploaded_mmd_available = not uploaded_mmd_df.empty
 
-    if trade_index_available:
+    if uploaded_mmd_available:
+        mmd_df = uploaded_mmd_df
+        mmd_df.attrs["benchmark_source_mode"] = "Uploaded MMD / AAA Curve"
+        mmd_df.attrs["benchmark_source_priority"] = "Primary"
+        mmd_df.attrs["uploaded_mmd_available"] = True
+        mmd_df.attrs["trade_index_available"] = trade_index_available
+        mmd_df.attrs["benchmark_conflict_policy"] = (
+            "Uploaded MMD is the active AAA benchmark; trade-sheet Index / Index Rate is retained for audit but not used as the benchmark curve."
+        )
+    elif trade_index_available:
         mmd_df = trade_index_curve_df
         mmd_df.attrs["benchmark_source_mode"] = "Trade Sheet Index / Index Rate"
-        mmd_df.attrs["benchmark_source_priority"] = "Primary"
+        mmd_df.attrs["benchmark_source_priority"] = "Fallback"
         mmd_df.attrs["uploaded_mmd_available"] = uploaded_mmd_available
-        mmd_df.attrs["benchmark_conflict_policy"] = "External MMD ignored because trade index data is available"
+        mmd_df.attrs["trade_index_available"] = True
+        mmd_df.attrs["benchmark_conflict_policy"] = "No uploaded MMD was provided; using trade-sheet Index / Index Rate fallback."
     else:
         mmd_df = uploaded_mmd_df
-        if uploaded_mmd_available:
-            mmd_df.attrs["benchmark_source_mode"] = "Uploaded MMD fallback"
-            mmd_df.attrs["benchmark_source_priority"] = "Fallback"
-            mmd_df.attrs["uploaded_mmd_available"] = True
-            mmd_df.attrs["benchmark_conflict_policy"] = "No trade index data found; using uploaded MMD fallback"
+        mmd_df.attrs["benchmark_source_mode"] = "None"
+        mmd_df.attrs["benchmark_source_priority"] = "Unavailable"
+        mmd_df.attrs["uploaded_mmd_available"] = False
+        mmd_df.attrs["trade_index_available"] = False
+        mmd_df.attrs["benchmark_conflict_policy"] = "No uploaded MMD or usable trade-sheet Index / Index Rate benchmark was found."
+
+    market_df = attach_active_benchmark_spreads(market_df, mmd_df, mmd_df.attrs.get("benchmark_source_mode", "None"))
 
     return bonds_df, trades_df, issuer_master, market_df, mmd_df, failed_files, duplicates_removed

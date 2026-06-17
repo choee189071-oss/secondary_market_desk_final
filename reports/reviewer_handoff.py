@@ -16,8 +16,9 @@ Issuer for demo: `{issuer}`
 4. Review `Market Analytics`: volume overview, activity concentration map, participation, and ranked liquidity bands.
 5. Open `Security Drilldown`; inspect the CUSIPs driving the filtered activity.
 6. Review `Peer Comparison` under the same filters.
-7. Read `Narrative Insights` and confirm each observation is supported by the filtered data.
-8. Use `Export` to download filtered trades, security drilldown, Excel workbook, or PDF summary.
+7. Save candidate CUSIPs into `RV / Watchlist`, then move each item through `New`, `Reviewing`, `Need Data Check`, `Approved`, or `Rejected`.
+8. Read `Narrative Insights` and confirm each observation is supported by the filtered data.
+9. Use `Export / Methodology` to download filtered trades, security drilldown, watchlist review output, Excel workbook, PDF summary, or PPTX outline.
 
 ## Analyst Review Checklist
 
@@ -30,6 +31,7 @@ Issuer for demo: `{issuer}`
 - Do liquidity metrics by maturity and trade size look reasonable?
 - Does the selected CUSIP trade path reconcile to source trades?
 - Are peer issuers compared under equivalent trading conditions?
+- Does each saved candidate have the correct review stage, decision, reviewer note, and next step?
 - Are report exports clear enough to send for internal review?
 
 ## Known Limitations / Questions
@@ -38,7 +40,8 @@ Issuer for demo: `{issuer}`
 - Trade-size buckets assume trade amount is reported as par amount in dollars. Confirm source scaling.
 - Odd Lot / Round Lot / Block Trade is inferred from par size. Confirm preferred thresholds.
 - Liquidity is currently displayed from trade frequency, par amount, spread/yield, and recency; confirm whether a formal liquidity score is needed.
-- MMD file management is hidden in the default workflow; trade-sheet benchmark fields may still support spread calculations when present.
+- Uploaded MMD is the primary AAA benchmark when provided; trade-sheet Index / Index Rate is fallback and audit evidence.
+- Watchlist review status is session-based until exported; confirm whether production needs permanent user accounts and database-backed review history.
 
 ## Feedback Format
 

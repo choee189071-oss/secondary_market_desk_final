@@ -4,6 +4,7 @@ import io
 import json
 import html
 import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -72,10 +73,12 @@ from reports.export_center import (
     focused_methodology_appendix as _focused_methodology_appendix,
 )
 from ui.cusip_detail import (
+    WATCHLIST_STAGE_OPTIONS,
     _focused_watchlist_dataframe,
     _focused_watchlist_markdown,
     _focused_watchlist_records,
     _upsert_focused_watchlist,
+    render_watchlist_board,
 )
 from ui.export_center import render_focused_export_methodology
 from ui.snapshot import (
@@ -520,6 +523,58 @@ div[data-testid="stMetric"] {
     line-height: 1.35;
 }
 
+.object-command-result {
+    background: #eef8f5;
+    border: 1px solid #b9dcd5;
+    border-radius: 10px;
+    color: #174a43;
+    font-size: 0.9rem;
+    margin: 8px 0 12px 0;
+    padding: 9px 12px;
+}
+
+.object-command-result a {
+    color: #11675d;
+    font-weight: 780;
+    text-decoration: none;
+}
+
+.object-command-result a:hover {
+    text-decoration: underline;
+}
+
+.object-status-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin: 12px 0 12px 0;
+}
+
+.object-status-item {
+    background: #ffffff;
+    border: 1px solid #dbe3ee;
+    border-radius: 10px;
+    padding: 9px 11px;
+    min-height: 58px;
+}
+
+.object-status-label {
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 780;
+    letter-spacing: 0.03em;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+}
+
+.object-status-value {
+    color: #111827;
+    font-size: 0.92rem;
+    font-weight: 720;
+    line-height: 1.22;
+    overflow-wrap: anywhere;
+}
+
 .advanced-gateway {
     background: #f8fafc;
     border: 1px solid #dbe3ee;
@@ -701,7 +756,8 @@ div[data-testid="stMetric"] {
 
     .file-card-grid,
     .status-card-grid,
-    .advanced-link-grid {
+    .advanced-link-grid,
+    .object-status-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
@@ -713,7 +769,8 @@ div[data-testid="stMetric"] {
 
     .file-card-grid,
     .status-card-grid,
-    .advanced-link-grid {
+    .advanced-link-grid,
+    .object-status-grid {
         grid-template-columns: repeat(1, minmax(0, 1fr));
     }
 }
@@ -1686,8 +1743,8 @@ def _render_benchmark_methodology_block(mmd_df: pd.DataFrame, benchmark_source_m
     st.markdown(
         """
 <div class="methodology-note">
-<b>Benchmark policy:</b> uploaded MMD is treated as the AAA benchmark curve when it is the active benchmark source.
-If trade-sheet Index / Index Rate is available, the app uses that trade-implied benchmark first and does not mix it with external MMD in the same run.
+<b>Benchmark policy:</b> uploaded MMD is treated as the primary AAA benchmark curve when provided.
+Trade-sheet Index / Index Rate is retained as fallback and audit evidence; the app does not mix both sources in the same run.
 </div>
 """,
         unsafe_allow_html=True,
@@ -1801,6 +1858,68 @@ def template_download_button(columns: list[str], label: str, filename: str):
 
 # Upload/data processing lives in engine/load_data.py.
 
+APP_DIR = Path(__file__).resolve().parent
+LOCAL_GOLDEN_TRADE = Path("/Users/zhouyiyi/Desktop/Intern_Muni_Data/Secondary/LADWP/2024-26/LADWP.xlsx")
+LOCAL_GOLDEN_MMD = Path("/Users/zhouyiyi/Desktop/Intern_Muni_Data/Secondary/LADWP/2024-26/mmd.csv")
+PROJECT_GOLDEN_TRADE = APP_DIR / "data" / "processed" / "Trade_Output_Sample.csv"
+PROJECT_GOLDEN_MMD = APP_DIR / "data" / "processed" / "mmd.csv"
+
+
+def _first_existing_path(*paths: Path) -> Path | None:
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def _golden_sample_payloads() -> tuple[list[tuple[str, bytes]], tuple[str, bytes] | None, dict]:
+    """Load a trusted demo dataset when reviewers want to bypass manual upload."""
+    trade_path = _first_existing_path(LOCAL_GOLDEN_TRADE, PROJECT_GOLDEN_TRADE)
+    mmd_path = _first_existing_path(LOCAL_GOLDEN_MMD, PROJECT_GOLDEN_MMD)
+    status = {
+        "trade_path": str(trade_path) if trade_path else "",
+        "mmd_path": str(mmd_path) if mmd_path else "",
+        "trade_available": bool(trade_path),
+        "mmd_available": bool(mmd_path),
+    }
+    trade_payloads = [(trade_path.name, trade_path.read_bytes())] if trade_path else []
+    mmd_payload = (mmd_path.name, mmd_path.read_bytes()) if mmd_path else None
+    return trade_payloads, mmd_payload, status
+
+
+def _render_golden_sample_controls(uploaded_trade_count: int) -> tuple[bool, dict]:
+    demo_enabled = bool(st.session_state.get("demo_golden_sample_enabled", False))
+    demo_trade_payloads, demo_mmd_payload, demo_status = _golden_sample_payloads()
+    demo_active = demo_enabled and uploaded_trade_count == 0 and bool(demo_trade_payloads)
+
+    c1, c2 = st.columns([0.58, 0.42])
+    with c1:
+        st.markdown(
+            "<div class='focus-band'><b>Demo:</b> load the LADWP golden sample for analyst review, regression, or training without selecting files.</div>",
+            unsafe_allow_html=True,
+        )
+        if demo_enabled and uploaded_trade_count > 0:
+            st.caption("Uploaded trade files override demo mode for this run.")
+        elif demo_active:
+            st.caption(f"Active sample: {Path(demo_status.get('trade_path', 'LADWP')).name}")
+        elif not demo_status.get("trade_available"):
+            st.caption("Golden sample file was not found on this machine.")
+    with c2:
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Load LADWP Golden Sample", disabled=not demo_status.get("trade_available")):
+                st.session_state["demo_golden_sample_enabled"] = True
+                st.rerun()
+        with b2:
+            if st.button("Exit Demo Mode", disabled=not demo_enabled):
+                st.session_state["demo_golden_sample_enabled"] = False
+                st.rerun()
+
+    demo_status["active"] = demo_active
+    demo_status["mmd_payload_loaded"] = bool(demo_mmd_payload and demo_active)
+    return demo_active, demo_status
+
+
 def dataframe_download_button(df: pd.DataFrame, label: str, filename: str):
     if df.empty:
         return
@@ -1896,15 +2015,21 @@ with st.expander(
     with upload_col2:
         bond_file = st.file_uploader("Bond Reference File — optional enrichment", type=["csv", "xlsx", "xls"])
         issuer_mapping_file = st.file_uploader("Issuer / Sector Mapping — optional", type=["csv", "xlsx", "xls"])
+        mmd_file = st.file_uploader("MMD / AAA Benchmark Curve — optional primary benchmark", type=["csv", "xlsx", "xls"])
         use_external_mmd_fallback = False
-        mmd_file = None
-        st.caption("Benchmark file management is hidden. Trading analytics use the uploaded trade tape.")
+        st.caption("If provided, uploaded MMD is the active AAA benchmark. Trade-sheet Index Rate is fallback only.")
+
+    demo_mode_active, demo_status = _render_golden_sample_controls(len(trade_files or []))
 
     render_upload_file_cards(
         trade_file_names=[f.name for f in trade_files] if trade_files else [],
         bond_file_name=bond_file.name if bond_file else None,
         issuer_mapping_file_name=issuer_mapping_file.name if issuer_mapping_file else None,
-        mmd_file_name=mmd_file.name if mmd_file else None,
+        mmd_file_name=(
+            mmd_file.name
+            if mmd_file
+            else (Path(demo_status.get("mmd_path", "")).name if demo_mode_active and demo_status.get("mmd_path") else None)
+        ),
         use_external_mmd_fallback=use_external_mmd_fallback,
     )
 
@@ -1912,8 +2037,10 @@ with st.expander(
         template_download_button(TRADE_REQUIRED + TRADE_RECOMMENDED + TRADE_OPTIONAL, "Trade template CSV", "trade_history_template.csv")
         template_download_button(BOND_REQUIRED + BOND_RECOMMENDED + BOND_OPTIONAL, "Optional bond reference template CSV", "bond_reference_template.csv")
 
-if not trade_files:
-    st.info("Upload at least one MuniPro trade-history file to open the Trading Workbench. Bond reference data is optional enrichment.")
+demo_trade_payloads, demo_mmd_payload, _demo_status = _golden_sample_payloads() if demo_mode_active else ([], None, {})
+
+if not trade_files and not demo_trade_payloads:
+    st.info("Upload at least one MuniPro trade-history file, or load the LADWP golden sample, to open the Trading Workbench. Bond reference data is optional enrichment.")
     with st.expander("Expected file logic"):
         st.write(
             "The app now uses a trade-first workflow: it standardizes CUSIP fields, uses each trade file name as the issuer name, "
@@ -1921,10 +2048,17 @@ if not trade_files:
         )
     st.stop()
 
-bond_payload = (bond_file.name, bond_file.getvalue()) if bond_file else None
-trade_payloads = [(f.name, f.getvalue()) for f in trade_files]
-issuer_mapping_payload = (issuer_mapping_file.name, issuer_mapping_file.getvalue()) if issuer_mapping_file else None
-mmd_payload = None
+if demo_mode_active and not trade_files:
+    bond_payload = None
+    trade_payloads = demo_trade_payloads
+    issuer_mapping_payload = None
+    mmd_payload = demo_mmd_payload
+    st.success("Demo mode active: loaded the LADWP golden sample into the full analysis workflow.")
+else:
+    bond_payload = (bond_file.name, bond_file.getvalue()) if bond_file else None
+    trade_payloads = [(f.name, f.getvalue()) for f in trade_files]
+    issuer_mapping_payload = (issuer_mapping_file.name, issuer_mapping_file.getvalue()) if issuer_mapping_file else None
+    mmd_payload = (mmd_file.name, mmd_file.getvalue()) if mmd_file else None
 show_file_audit = True
 show_methodology_audit = False
 
@@ -2036,7 +2170,7 @@ if not uploaded_issuers:
 if show_file_audit:
     st.success(
         f"Processed {len(market_df):,} trade rows and built {len(bonds_df):,} security-reference rows "
-        f"from {len(trade_files):,} trade file(s). Detected {len(uploaded_issuers):,} issuer(s)."
+        f"from {len(trade_payloads):,} trade file(s). Detected {len(uploaded_issuers):,} issuer(s)."
     )
 
 benchmark_source_mode = mmd_df.attrs.get("benchmark_source_mode", "None")
@@ -2045,14 +2179,14 @@ benchmark_conflict_policy = mmd_df.attrs.get("benchmark_conflict_policy", "No be
 uploaded_mmd_available = bool(mmd_df.attrs.get("uploaded_mmd_available", False))
 
 if show_methodology_audit:
-    if benchmark_source_mode == "Trade Sheet Index / Index Rate":
+    if benchmark_source_mode == "Uploaded MMD / AAA Curve":
         st.info(
-            "Benchmark source: using **Index / Index Rate from the uploaded trade sheet** as the primary benchmark universe. "
-            "Any uploaded MMD file is treated as fallback only and is not mixed into the same analytics run."
+            "Benchmark source: using the **uploaded MMD file as the primary AAA benchmark curve**. "
+            "Trade-sheet Index / Index Rate is retained for audit/fallback and is not mixed into the same analytics run."
         )
-    elif benchmark_source_mode == "Uploaded MMD fallback":
+    elif benchmark_source_mode == "Trade Sheet Index / Index Rate":
         st.info(
-            "Benchmark source: using the **uploaded MMD file as fallback** because the trade sheet did not contain usable Index / Index Rate data."
+            "Benchmark source: using **Index / Index Rate from the uploaded trade sheet** as fallback because no usable uploaded MMD was provided."
         )
     else:
         st.warning("No benchmark source detected. Upload trades with Index / Index Rate or provide an MMD file for benchmark analytics.")
@@ -2064,10 +2198,10 @@ This dashboard uses **one benchmark source at a time** to avoid benchmark-source
 
 **Priority hierarchy**
 
-1. **Trade Sheet Index / Index Rate — recommended primary source.**  
-   This is preferred because it comes from the same uploaded trade tape and pricing context as the observed trades.
-2. **Uploaded MMD file — fallback only.**  
-   This is used only when the trade sheet does not include usable `Index` / `Index Rate` fields.
+1. **Uploaded MMD file — primary AAA benchmark.**
+   This is the approved benchmark when the user provides a clean MMD curve.
+2. **Trade Sheet Index / Index Rate — fallback and audit evidence.**
+   This is used only when no usable uploaded MMD file is provided.
 3. **No benchmark source.**  
    Yield-only and liquidity analytics can still run, but benchmark spread analytics are skipped or downgraded.
 
@@ -2621,8 +2755,8 @@ This section groups uploaded trade rows by **trade date** and **issuer**, then p
 
 **Benchmark logic:**
 
-- **Primary source = trade-sheet `Index` / `Index Rate`**, when available. This keeps benchmark spread analytics aligned with the same pricing environment as the uploaded MuniPro trades.
-- **Uploaded MMD is fallback only** and is used only when trade-sheet index data is unavailable.
+- **Primary source = uploaded MMD / AAA curve**, when provided.
+- **Trade-sheet `Index` / `Index Rate` is fallback and audit evidence** when no usable uploaded MMD is available.
 - The app intentionally uses **one benchmark universe at a time**; it does not mix trade-sheet index rates with external MMD rates in the same run.
 - If explicit non-AAA curves are unavailable, the app can still use visible rating-spread assumptions as an analytical approximation.
 - Units in the code are percentage points: `0.10 = 10 bps`.
@@ -7133,21 +7267,22 @@ else:
             safe_dataframe(shock_assumption_df, width="stretch", hide_index=True)
 
 
-section_anchor("watchlist", "Watchlist / Saved Candidates")
-with st.expander("Methodology: watchlist / saved candidates", expanded=False):
+section_anchor("watchlist", "Watchlist Board / Reviewer Mode")
+with st.expander("Methodology: watchlist board / reviewer mode", expanded=False):
     st.markdown(
         """
-This section lets users save CUSIPs for later review during the current session.
+This section turns saved CUSIPs into a review pipeline for the current session.
 
 **Why it matters:**
 
-A trading workflow often moves from screening → shortlist → detailed review. The watchlist keeps promising CUSIPs visible without forcing users to re-filter every time.
+A trading workflow often moves from screening → shortlist → review → approve/reject. The board keeps promising CUSIPs visible and gives analysts a lightweight place to record review status, decision, next step, and notes.
 
 **Current implementation:**
 
 - Uses Streamlit session state, so it persists while the app session is active.
+- Supports review stages: `New`, `Reviewing`, `Need Data Check`, `Approved`, and `Rejected`.
 - The same saved candidate list is used by CUSIP Drilldown, RV / Watchlist, Advanced Analysis, and Export.
-- Users can add CUSIPs from the active filter scope and download the watchlist as CSV or Markdown.
+- Users can add CUSIPs from the active filter scope and download the reviewed watchlist as CSV or Markdown.
 - This is not a database-backed permanent watchlist yet; that would be a future production feature.
         """
     )
@@ -7178,7 +7313,7 @@ with watch_col2:
 with watch_col3:
     watch_status = st.selectbox(
         "Status",
-        ["Review", "High priority", "Needs data check", "Pass / monitor"],
+        WATCHLIST_STAGE_OPTIONS,
         key="watchlist_add_focused_status",
     )
     watch_next_step = st.text_input(
@@ -7215,22 +7350,14 @@ saved_watchlist = _focused_watchlist_dataframe(watch_summary)
 if saved_watchlist.empty:
     st.info("No CUSIPs saved yet. Add candidates from CUSIP Drilldown, RV / Watchlist, or the selector above.")
 else:
-    w1, w2, w3 = st.columns(3)
-    with w1:
-        clean_metric_card("Saved CUSIPs", f"{len(saved_watchlist):,}", size="small")
-    with w2:
-        high_priority_count = int((saved_watchlist.get("status", pd.Series(dtype=str)).astype(str) == "High priority").sum())
-        clean_metric_card("High Priority", f"{high_priority_count:,}", size="small")
-    with w3:
-        data_check_count = int((saved_watchlist.get("status", pd.Series(dtype=str)).astype(str) == "Needs data check").sum())
-        clean_metric_card("Needs Data Check", f"{data_check_count:,}", size="small")
+    render_watchlist_board(saved_watchlist, selected_issuer, safe_dataframe, key_prefix="advanced_watchlist_board")
     watch_cols = [
-        "cusip", "issuer", "status", "reason", "next_step", "signal", "maturity_bucket",
+        "cusip", "issuer", "status", "review_decision", "reviewer", "reason", "next_step", "signal", "maturity_bucket",
         "current_spread_bps", "peer_median_gap_bps", "liquidity_score", "rv_score",
-        "trade_count", "total_trade_amount", "latest_trade", "note", "source", "updated_at",
+        "trade_count", "total_trade_amount", "latest_trade", "note", "review_note", "source", "updated_at", "reviewed_at",
     ]
     collapsed_dataframe(
-        "Saved candidate table",
+        "Saved candidate export table",
         saved_watchlist[[c for c in watch_cols if c in saved_watchlist.columns]],
         width="stretch",
         hide_index=True,

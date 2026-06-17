@@ -36,27 +36,27 @@ def _build_snapshot_methodology_cards(
     rating_rate = _nonnull_rate(issuer_df, rating_col) if rating_col else None
     benchmark_rows = len(mmd_df) if isinstance(mmd_df, pd.DataFrame) else 0
 
-    if benchmark_source_mode == "Uploaded MMD fallback":
+    if benchmark_source_mode == "Uploaded MMD / AAA Curve":
         mmd_status = "good"
-        mmd_value = "Uploaded MMD active"
-        mmd_detail = f"External MMD is being used as the AAA benchmark curve with {benchmark_rows:,} benchmark row(s)."
+        mmd_value = "Uploaded MMD primary"
+        mmd_detail = f"Uploaded MMD is the active AAA benchmark curve with {benchmark_rows:,} benchmark row(s)."
     elif benchmark_source_mode == "Trade Sheet Index / Index Rate":
         mmd_status = "warn"
-        mmd_value = "Trade index active"
-        mmd_detail = f"No external MMD is active in this run; trade-sheet Index Rate is the benchmark source with {benchmark_rows:,} benchmark row(s)."
+        mmd_value = "Trade index fallback"
+        mmd_detail = f"No usable uploaded MMD is active; trade-sheet Index Rate is the fallback benchmark with {benchmark_rows:,} benchmark row(s)."
     else:
         mmd_status = "bad"
         mmd_value = "No active benchmark"
         mmd_detail = "No trade index or uploaded MMD benchmark is available."
 
-    if (index_rate or 0) >= 70:
+    if benchmark_source_mode == "Uploaded MMD / AAA Curve":
+        index_status = "good"
+        index_value = "MMD primary"
+        index_detail = "Trade-sheet Index Rate is retained as audit evidence, not the active benchmark."
+    elif (index_rate or 0) >= 70:
         index_status = "good"
         index_value = f"{index_rate:.1f}% numeric"
-        index_detail = "Trade-sheet Index Rate is available for benchmark spread analytics."
-    elif benchmark_source_mode == "Uploaded MMD fallback":
-        index_status = "warn"
-        index_value = "Index Rate weak / absent"
-        index_detail = "Uploaded MMD fallback is active; verify MMD date/tenor coverage before relying on spread outputs."
+        index_detail = "Fallback trade-sheet Index Rate is available for benchmark spread analytics."
     elif (spread_rate or 0) >= 70:
         index_status = "warn"
         index_value = f"Spread field {spread_rate:.1f}% numeric"
@@ -170,12 +170,12 @@ def _build_snapshot_takeaway(
             f"and liquidity score {_fmt_num(top.get('liquidity_score'))}."
         )
 
-    if benchmark_source_mode == "Trade Sheet Index / Index Rate":
+    if benchmark_source_mode == "Uploaded MMD / AAA Curve":
         benchmark_label = "Benchmark OK"
-        benchmark_detail = "Using trade-sheet Index / Index Rate; external MMD is not mixed into this run."
-    elif benchmark_source_mode == "Uploaded MMD fallback":
-        benchmark_label = "MMD fallback active"
-        benchmark_detail = "Uploaded MMD is being used as the AAA benchmark curve."
+        benchmark_detail = "Using uploaded MMD as the primary AAA benchmark curve; trade-sheet Index Rate is audit/fallback only."
+    elif benchmark_source_mode == "Trade Sheet Index / Index Rate":
+        benchmark_label = "Fallback active"
+        benchmark_detail = "Using trade-sheet Index / Index Rate because no usable uploaded MMD was provided."
     else:
         benchmark_label = "Benchmark warning"
         benchmark_detail = "No active benchmark source; spread/RV conclusions should be treated as incomplete."
@@ -309,8 +309,8 @@ def render_focused_snapshot(
             issuer_df=issuer_base,
             mmd_df=mmd_df,
             benchmark_source_mode=benchmark_source_mode,
-            benchmark_priority="Primary" if benchmark_source_mode == "Trade Sheet Index / Index Rate" else "Fallback",
-            benchmark_conflict_policy="One benchmark source is used per run; trade-sheet Index Rate is not mixed with uploaded MMD.",
+            benchmark_priority="Primary" if benchmark_source_mode == "Uploaded MMD / AAA Curve" else "Fallback",
+            benchmark_conflict_policy="One benchmark source is used per run; uploaded MMD is not mixed with trade-sheet Index Rate.",
             title="Detailed Evidence",
             expanded=False,
             show_cards=False,

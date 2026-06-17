@@ -119,9 +119,9 @@ def render_focused_export_methodology(
         "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
     ]
     watch_cols = [
-        "cusip", "issuer", "status", "reason", "next_step", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
+        "cusip", "issuer", "status", "review_decision", "reviewer", "reason", "next_step", "signal", "maturity_bucket", "current_spread_bps", "peer_median_gap_bps",
         "liquidity_score", "rv_score", "trade_count", "total_trade_amount", "latest_trade",
-        "note", "source", "updated_at",
+        "note", "review_note", "source", "updated_at", "reviewed_at",
     ]
 
     with st.expander("Report contents included", expanded=False):

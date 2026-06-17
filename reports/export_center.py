@@ -145,7 +145,7 @@ def focused_methodology_appendix(
             {
                 "Section": "Benchmark",
                 "Policy": "Uploaded MMD role",
-                "Current treatment": "Uploaded MMD is treated as the AAA benchmark curve when external MMD fallback is active.",
+                "Current treatment": "Uploaded MMD is treated as the primary AAA benchmark curve when provided.",
                 "Audit evidence": f"{len(mmd_df) if isinstance(mmd_df, pd.DataFrame) else 0:,} MMD row(s) loaded.",
             },
             {
@@ -505,9 +505,15 @@ def focused_report_pptx_bytes(context: dict) -> tuple[bytes | None, str | None]:
         watch_rows = []
         for _, row in context["saved_watchlist"].head(5).iterrows():
             note = str(row.get("note", "") or "").strip()
-            status = row.get("status", "Review")
+            status = row.get("status", "New")
+            decision = str(row.get("review_decision", "") or "").strip()
+            reviewer = str(row.get("reviewer", "") or "").strip()
             next_step = str(row.get("next_step", "") or "").strip()
             parts = [str(row.get("signal", "Monitor")), f"status {status}"]
+            if decision and decision != "No decision":
+                parts.append(f"decision: {decision}")
+            if reviewer:
+                parts.append(f"reviewer: {reviewer}")
             if next_step:
                 parts.append(f"next: {next_step}")
             if note:
@@ -522,8 +528,8 @@ def focused_report_pptx_bytes(context: dict) -> tuple[bytes | None, str | None]:
         add_bullets(
             slide,
             [
-                "Uploaded MMD is AAA benchmark when external MMD fallback is active.",
-                "Trade-sheet Index / Index Rate is not blended with external MMD.",
+                "Uploaded MMD is the primary AAA benchmark when provided.",
+                "Trade-sheet Index / Index Rate is fallback/audit evidence and is not blended with external MMD.",
                 "Callable, liquidity, sector, and rating effects remain separate from benchmark spread.",
                 "RV and liquidity scores are screening tools, not investment recommendations.",
             ],

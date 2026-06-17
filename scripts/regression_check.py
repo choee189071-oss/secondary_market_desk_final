@@ -379,7 +379,7 @@ def build_regression_context(
             },
             {
                 "Area": "Benchmark policy",
-                "Status": "Pass" if benchmark_source_mode in {"Trade Sheet Index / Index Rate", "Uploaded MMD fallback"} else "Warn",
+                "Status": "Pass" if benchmark_source_mode in {"Uploaded MMD / AAA Curve", "Trade Sheet Index / Index Rate"} else "Warn",
                 "Value": benchmark_source_mode,
                 "Detail": benchmark_conflict_policy,
             },
@@ -616,7 +616,7 @@ def main() -> int:
     add_check(checks, "Issuer detected", diagnostics["selected_issuer"] != "Unknown", diagnostics["issuer_values"][:5])
     add_check(checks, "CUSIP summary generated", len(context["cusip_summary"]) > 0, f"rows={len(context['cusip_summary']):,}")
     add_check(checks, "Top opportunities generated", len(context["top_opportunities"]) >= 1, context["top_opportunities"].head(1).to_dict("records"))
-    add_check(checks, "Benchmark source resolved", diagnostics["benchmark_source_mode"] in {"Trade Sheet Index / Index Rate", "Uploaded MMD fallback"}, diagnostics["benchmark_source_mode"])
+    add_check(checks, "Benchmark source resolved", diagnostics["benchmark_source_mode"] in {"Uploaded MMD / AAA Curve", "Trade Sheet Index / Index Rate"}, diagnostics["benchmark_source_mode"])
     add_check(checks, "Benchmark long generated", diagnostics["benchmark_long_rows"] > 0, f"rows={diagnostics['benchmark_long_rows']:,}")
     add_check(checks, "Spread observations generated", diagnostics["spread_observation_rows"] > 0, f"rows={diagnostics['spread_observation_rows']:,}")
     add_check(checks, "Movement ladder generated", diagnostics["movement_ladder_shape"][0] > 0, f"shape={diagnostics['movement_ladder_shape']}")

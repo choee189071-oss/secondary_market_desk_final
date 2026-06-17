@@ -72,7 +72,7 @@ def render_upload_file_cards(
                 "kicker": "Optional benchmark",
                 "title": "MMD / AAA curve",
                 "value": mmd_file_name or "Fallback enabled; no file selected",
-                "detail": "AAA fallback curve.",
+                "detail": "AAA primary curve when uploaded.",
             }
         )
     _render_card_grid(cards, "file-card-grid")
@@ -116,19 +116,19 @@ def build_upload_audit_cards(
     yield_status = _rate_status(yield_rate, good_threshold=90, warn_threshold=70)
 
     best_benchmark_input_rate = max([x for x in [index_rate, spread_rate] if x is not None], default=0)
-    if benchmark_source_mode in {"Trade Sheet Index / Index Rate", "Uploaded MMD fallback"}:
+    if benchmark_source_mode in {"Uploaded MMD / AAA Curve", "Trade Sheet Index / Index Rate"}:
         benchmark_status = "good"
     elif use_external_mmd_fallback and not mmd_file_provided:
         benchmark_status = "warn"
     else:
         benchmark_status = "bad"
 
-    if benchmark_source_mode == "Trade Sheet Index / Index Rate":
+    if benchmark_source_mode == "Uploaded MMD / AAA Curve":
+        benchmark_value = "Uploaded MMD / AAA Curve"
+        benchmark_detail = "Primary AAA benchmark is active. Trade-sheet Index Rate is retained for audit/fallback only."
+    elif benchmark_source_mode == "Trade Sheet Index / Index Rate":
         benchmark_value = "Trade sheet Index / Index Rate"
-        benchmark_detail = "Primary benchmark is active. External MMD is not mixed into this run."
-    elif benchmark_source_mode == "Uploaded MMD fallback":
-        benchmark_value = "Uploaded MMD fallback"
-        benchmark_detail = "Uploaded MMD is active as the AAA benchmark because trade index data was unavailable."
+        benchmark_detail = "Fallback benchmark is active because no usable uploaded MMD was provided."
     else:
         benchmark_value = "No active benchmark"
         benchmark_detail = "Yield/liquidity analytics can run, but spread-to-benchmark views are degraded."
@@ -183,7 +183,7 @@ def build_upload_audit_cards(
             "kicker": "Spread inputs",
             "title": "Index Rate / Spread",
             "value": f"Index {index_rate or 0:.1f}% / Spread {spread_rate or 0:.1f}%",
-            "detail": "Trade Index Rate is preferred; uploaded MMD can fill the benchmark role only as fallback.",
+            "detail": "Uploaded MMD is primary when available; trade Index Rate is fallback and audit evidence.",
         },
     ]
 
