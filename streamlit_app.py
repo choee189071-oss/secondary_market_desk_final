@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import html
@@ -1643,6 +1644,7 @@ def _scope_nunique(df: pd.DataFrame | None, column: str) -> int:
 
 
 SECTION6_MATURITY_YEAR_OPTIONS = [f"{year}Y" for year in range(1, MAX_MATURITY_YEAR + 1)]
+SECTION6_MAX_DYNAMIC_FILTER_OPTIONS = 500
 
 
 def _section6_filter_label(values: tuple[object, ...] | list[object], all_label: str = "All") -> str:
@@ -1731,6 +1733,115 @@ def _section6_unique_options(df: pd.DataFrame, column: str, *, coupon_sort: bool
     return sorted(values)
 
 
+def _section6_has_filter_values(df: pd.DataFrame, column: str) -> bool:
+    if df.empty or column not in df.columns:
+        return False
+    return df[column].notna().any()
+
+
+def _section6_search_options(
+    df: pd.DataFrame,
+    column: str,
+    query: str = "",
+    *,
+    limit: int = SECTION6_MAX_DYNAMIC_FILTER_OPTIONS,
+    sort_key=None,
+) -> tuple[list[str], bool]:
+    if df.empty or column not in df.columns:
+        return [], False
+
+    series = df[column].dropna().astype(str).str.strip()
+    series = series[
+        (series != "")
+        & (~series.str.lower().isin({"nan", "none", "unknown", "<na>"}))
+    ]
+    query = str(query or "").strip()
+    if query:
+        series = series[series.str.upper().str.contains(re.escape(query.upper()), na=False)]
+
+    values = series.drop_duplicates().tolist()
+    values = sorted(values, key=sort_key) if sort_key else sorted(values)
+    limited = len(values) > limit
+    return values[:limit], limited
+
+
+def _section6_filter_existing_values(
+    df: pd.DataFrame,
+    column: str,
+    values: list[object] | tuple[object, ...],
+) -> list[str]:
+    if df.empty or column not in df.columns or not values:
+        return []
+
+    series = df[column].dropna().astype(str)
+    existing: list[str] = []
+    for value in values:
+        value_text = str(value).strip()
+        if value_text and series.eq(value_text).any():
+            existing.append(value_text)
+    return existing
+
+
+def _section6_filter_widget_key(prefix: str, value: object) -> str:
+    digest = hashlib.md5(str(value).encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}_{digest}"
+
+
+def _section6_checkbox_grid(
+    label_prefix: str,
+    options: list[str],
+    previous_values: list[str] | tuple[str, ...],
+    *,
+    columns: int = 4,
+) -> tuple[str, ...]:
+    if not options:
+        return ()
+
+    selected: list[str] = []
+    previous = {str(value) for value in previous_values}
+    grid = st.columns(columns)
+    for idx, option in enumerate(options):
+        option_text = str(option)
+        key = _section6_filter_widget_key(label_prefix, option_text)
+        with grid[idx % columns]:
+            if st.checkbox(option_text, value=option_text in previous, key=key):
+                selected.append(option_text)
+    return tuple(selected)
+
+
+def _prepare_benchmark_daily_curve(
+    mmd_plot: pd.DataFrame,
+    date_col: str,
+    benchmark_yield: pd.Series,
+    *,
+    smoothing_window: int = 5,
+) -> pd.DataFrame:
+    if mmd_plot.empty:
+        return pd.DataFrame()
+
+    curve = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(mmd_plot[date_col], errors="coerce").dt.normalize(),
+            "benchmark_yield": pd.to_numeric(benchmark_yield, errors="coerce"),
+        }
+    ).dropna(subset=["trade_date", "benchmark_yield"])
+    if curve.empty:
+        return curve
+
+    curve = curve[curve["trade_date"].dt.dayofweek < 5]
+    curve = (
+        curve.groupby("trade_date", as_index=False)
+        .agg(benchmark_yield=("benchmark_yield", "median"))
+        .sort_values("trade_date")
+    )
+    curve["benchmark_plot_yield"] = (
+        curve["benchmark_yield"]
+        .rolling(window=smoothing_window, min_periods=1)
+        .median()
+    )
+    return curve
+
+
 def _render_section6_filters(section2_market_df: pd.DataFrame, selected_issuer: str) -> dict:
     option_source = section2_market_df.copy()
     if "issuer" in option_source.columns:
@@ -1742,53 +1853,97 @@ def _render_section6_filters(section2_market_df: pd.DataFrame, selected_issuer: 
     c1, c2, c3 = st.columns([1, 1, 1.25])
     with c1:
         all_years = st.checkbox("Section 6 All Maturity Years", value=True, key="section6_all_maturity_years")
-        if all_years:
-            maturity_labels: list[str] = []
-        else:
-            current_years = [
-                label for label in st.session_state.get("section6_maturity_years", []) if label in SECTION6_MATURITY_YEAR_OPTIONS
-            ]
-            st.session_state["section6_maturity_years"] = current_years
-            maturity_labels = st.multiselect(
-                "Section 6 Maturity Years",
-                SECTION6_MATURITY_YEAR_OPTIONS,
-                key="section6_maturity_years",
-                placeholder="Choose one or more years",
-            )
+        maturity_labels: tuple[str, ...] = ()
+        with st.expander("Section 6 Choose Maturity Years", expanded=not all_years):
+            if all_years:
+                st.caption("Uncheck Section 6 All Maturity Years to select individual years.")
+            else:
+                current_years = [
+                    label for label in st.session_state.get("section6_maturity_years", []) if label in SECTION6_MATURITY_YEAR_OPTIONS
+                ]
+                maturity_labels = _section6_checkbox_grid(
+                    "section6_maturity_year",
+                    SECTION6_MATURITY_YEAR_OPTIONS,
+                    current_years,
+                    columns=5,
+                )
+                st.session_state["section6_maturity_years"] = list(maturity_labels)
 
-    coupon_options = _section6_unique_options(option_source, "workbench_coupon", coupon_sort=True)
+    coupon_available = _section6_has_filter_values(option_source, "workbench_coupon")
     with c2:
-        all_coupons = st.checkbox("Section 6 All Coupons", value=True, key="section6_all_coupons", disabled=not coupon_options)
-        if all_coupons or not coupon_options:
-            coupon_values: tuple[str, ...] = ()
-        else:
-            current_coupons = [value for value in st.session_state.get("section6_coupon_values", []) if value in coupon_options]
-            st.session_state["section6_coupon_values"] = current_coupons
-            coupon_values = tuple(
-                st.multiselect(
-                    "Section 6 Coupon",
+        all_coupons = st.checkbox("Section 6 All Coupons", value=True, key="section6_all_coupons", disabled=not coupon_available)
+        coupon_values: tuple[str, ...] = ()
+        with st.expander("Section 6 Choose Coupons", expanded=not all_coupons and coupon_available):
+            if not coupon_available:
+                st.caption("No coupon values are available for this issuer.")
+            elif all_coupons:
+                st.caption("Uncheck Section 6 All Coupons to select individual coupon values.")
+            else:
+                coupon_search = st.text_input(
+                    "Section 6 Search Coupon",
+                    key="section6_coupon_search",
+                    placeholder="Optional",
+                )
+                coupon_options, coupon_limited = _section6_search_options(
+                    option_source,
+                    "workbench_coupon",
+                    coupon_search,
+                    sort_key=_section6_coupon_sort_key,
+                )
+                current_coupons = _section6_filter_existing_values(
+                    option_source,
+                    "workbench_coupon",
+                    st.session_state.get("section6_coupon_values", []),
+                )
+                coupon_options = list(dict.fromkeys(current_coupons + coupon_options))
+                coupon_values = _section6_checkbox_grid(
+                    "section6_coupon_value",
                     coupon_options,
-                    key="section6_coupon_values",
-                    placeholder="Choose coupon values",
+                    current_coupons,
+                    columns=4,
                 )
-            )
+                st.session_state["section6_coupon_values"] = list(coupon_values)
+                if coupon_limited:
+                    st.caption(f"Showing first {SECTION6_MAX_DYNAMIC_FILTER_OPTIONS:,} coupon matches. Type to narrow.")
 
-    cusip_options = _section6_unique_options(option_source, "cusip")
+    cusip_available = _section6_has_filter_values(option_source, "cusip")
     with c3:
-        all_cusips = st.checkbox("Section 6 All CUSIPs", value=True, key="section6_all_cusips", disabled=not cusip_options)
-        if all_cusips or not cusip_options:
-            cusips: tuple[str, ...] = ()
-        else:
-            current_cusips = [value for value in st.session_state.get("section6_cusips", []) if value in cusip_options]
-            st.session_state["section6_cusips"] = current_cusips
-            cusips = tuple(
-                st.multiselect(
-                    "Section 6 CUSIP",
-                    cusip_options,
-                    key="section6_cusips",
-                    placeholder="Choose one or more CUSIPs",
+        all_cusips = st.checkbox("Section 6 All CUSIPs", value=True, key="section6_all_cusips", disabled=not cusip_available)
+        cusips: tuple[str, ...] = ()
+        with st.expander("Section 6 Choose CUSIPs", expanded=not all_cusips and cusip_available):
+            if not cusip_available:
+                st.caption("No CUSIPs are available for this issuer.")
+            elif all_cusips:
+                st.caption("Uncheck Section 6 All CUSIPs, then search to select one or more CUSIPs.")
+            else:
+                cusip_search = st.text_input(
+                    "Section 6 Search CUSIP",
+                    key="section6_cusip_search",
+                    placeholder="Type at least 2 characters",
                 )
-            )
+                current_cusips = _section6_filter_existing_values(
+                    option_source,
+                    "cusip",
+                    st.session_state.get("section6_cusips", []),
+                )
+                if len(str(cusip_search or "").strip()) >= 2:
+                    cusip_matches, cusip_limited = _section6_search_options(option_source, "cusip", cusip_search)
+                else:
+                    cusip_matches, cusip_limited = [], False
+                cusip_options = list(dict.fromkeys(current_cusips + cusip_matches))
+                if not cusip_options:
+                    st.caption("Type at least 2 CUSIP characters to load matching choices.")
+                    cusips = ()
+                else:
+                    cusips = _section6_checkbox_grid(
+                        "section6_cusip_value",
+                        cusip_options,
+                        current_cusips,
+                        columns=3,
+                    )
+                    st.session_state["section6_cusips"] = list(cusips)
+                    if cusip_limited:
+                        st.caption(f"Showing first {SECTION6_MAX_DYNAMIC_FILTER_OPTIONS:,} CUSIP matches. Type more to narrow.")
 
     maturity_years = tuple(int(str(label).replace("Y", "")) for label in maturity_labels)
     return {
@@ -3004,7 +3159,26 @@ This section groups uploaded trade rows by **trade date** and **issuer**, then p
     issuer_choices = uploaded_issuers
     default_compare = [selected_issuer] if selected_issuer in issuer_choices else issuer_choices[:1]
     compare_issuers = st.multiselect("Compare Issuers", issuer_choices, default=default_compare)
-    compare_bucket = st.selectbox("Comparison Maturity Year", MATURITY_BUCKET_OPTIONS, key="compare_bucket")
+    default_compare_bucket = "10Y" if "10Y" in MATURITY_BUCKET_OPTIONS else "All"
+    if "maturity_bucket" in market_df.columns and "issuer" in market_df.columns:
+        issuer_bucket_counts = (
+            market_df.loc[market_df["issuer"].astype(str) == str(selected_issuer), "maturity_bucket"]
+            .dropna()
+            .astype(str)
+            .value_counts()
+        )
+        for bucket in issuer_bucket_counts.index:
+            if bucket in MATURITY_BUCKET_OPTIONS and bucket != "All":
+                default_compare_bucket = bucket
+                break
+    compare_bucket = st.selectbox(
+        "Comparison Maturity Year",
+        MATURITY_BUCKET_OPTIONS,
+        index=MATURITY_BUCKET_OPTIONS.index(default_compare_bucket) if default_compare_bucket in MATURITY_BUCKET_OPTIONS else 0,
+        key="compare_bucket",
+    )
+    if compare_bucket == "All":
+        st.warning("All maturity years mixes different duration bonds. Select a single maturity year for a steadier issuer-vs-benchmark comparison.")
     benchmark_ratings = st.multiselect(
         "Benchmark Curve(s)",
         BENCHMARK_RATINGS,
@@ -3074,22 +3248,24 @@ This section groups uploaded trade rows by **trade date** and **issuer**, then p
                     if y is None:
                         unavailable_ratings.append(rating)
                         continue
+                    curve_daily = _prepare_benchmark_daily_curve(mmd_plot, date_col, y)
+                    if curve_daily.empty:
+                        unavailable_ratings.append(rating)
+                        continue
                     fig.add_scatter(
-                        x=mmd_plot[date_col],
-                        y=y,
+                        x=curve_daily["trade_date"],
+                        y=curve_daily["benchmark_plot_yield"],
                         mode="lines",
                         name=f"{rating} Curve ({mmd_col})",
                     )
                     benchmark_frames.append(
-                        pd.DataFrame({
-                            "trade_date": mmd_plot[date_col].dt.normalize(),
-                            "benchmark_rating": rating,
-                            "benchmark_yield": y,
-                            "mmd_tenor": mmd_col,
-                            "rating_spread_bps": meta.get("rating_spread_bps"),
-                            "benchmark_source": meta.get("benchmark_source"),
-                            "source_column": meta.get("source_column"),
-                        })
+                        curve_daily.assign(
+                            benchmark_rating=rating,
+                            mmd_tenor=mmd_col,
+                            rating_spread_bps=meta.get("rating_spread_bps"),
+                            benchmark_source=meta.get("benchmark_source"),
+                            source_column=meta.get("source_column"),
+                        )
                     )
                 benchmark_daily = pd.concat(benchmark_frames, ignore_index=True) if benchmark_frames else pd.DataFrame()
                 benchmark_ready = not benchmark_daily.empty
