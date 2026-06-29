@@ -1642,6 +1642,180 @@ def _scope_nunique(df: pd.DataFrame | None, column: str) -> int:
     return int(df[column].dropna().astype(str).nunique())
 
 
+SECTION6_MATURITY_YEAR_OPTIONS = [f"{year}Y" for year in range(1, MAX_MATURITY_YEAR + 1)]
+
+
+def _section6_filter_label(values: tuple[object, ...] | list[object], all_label: str = "All") -> str:
+    if not values:
+        return all_label
+    labels = [str(v) for v in values]
+    if len(labels) <= 4:
+        return ", ".join(labels)
+    return f"{len(labels)} selected"
+
+
+def _section6_parse_maturity_year(value: object) -> float:
+    if pd.isna(value):
+        return np.nan
+    text = str(value).strip().upper().replace("YEARS", "").replace("YEAR", "").replace("Y", "")
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if match:
+        try:
+            year = int(np.ceil(float(match.group(0))))
+            return float(year) if 1 <= year <= MAX_MATURITY_YEAR else np.nan
+        except Exception:
+            return np.nan
+    try:
+        year = int(np.ceil(float(value)))
+        return float(year) if 1 <= year <= MAX_MATURITY_YEAR else np.nan
+    except Exception:
+        return np.nan
+
+
+def _section6_format_coupon_value(value: object) -> object:
+    if pd.isna(value):
+        return pd.NA
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "unknown"}:
+        return pd.NA
+    numeric_text = text.replace("%", "").replace(",", "").strip()
+    numeric = pd.to_numeric(pd.Series([numeric_text]), errors="coerce").iloc[0]
+    if pd.notna(numeric):
+        return f"{float(numeric):g}"
+    return text
+
+
+def _section6_coupon_sort_key(value: object) -> tuple[int, float | str]:
+    try:
+        return (0, float(str(value).replace("%", "").strip()))
+    except Exception:
+        return (1, str(value))
+
+
+def _section6_ensure_filter_columns(df: pd.DataFrame | None) -> pd.DataFrame:
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame() if df is None else df.copy()
+    out = df.copy()
+    if "workbench_maturity_year" not in out.columns:
+        if "maturity_year" in out.columns:
+            out["workbench_maturity_year"] = out["maturity_year"].apply(_section6_parse_maturity_year)
+        elif "years_to_maturity" in out.columns:
+            out["workbench_maturity_year"] = pd.to_numeric(out["years_to_maturity"], errors="coerce").apply(_section6_parse_maturity_year)
+        elif {"maturity", "trade_date"}.issubset(out.columns):
+            maturity = pd.to_datetime(out["maturity"], errors="coerce")
+            trade_date = pd.to_datetime(out["trade_date"], errors="coerce")
+            out["workbench_maturity_year"] = ((maturity - trade_date).dt.days / 365.25).apply(_section6_parse_maturity_year)
+        elif "maturity_bucket" in out.columns:
+            out["workbench_maturity_year"] = out["maturity_bucket"].apply(_section6_parse_maturity_year)
+        else:
+            out["workbench_maturity_year"] = np.nan
+    if "workbench_coupon" not in out.columns:
+        coupon_labels = pd.Series(pd.NA, index=out.index, dtype="object")
+        for col in ["coupon", "coupon_trade", "coupon_bond"]:
+            if col in out.columns:
+                coupon_labels = coupon_labels.combine_first(out[col].map(_section6_format_coupon_value))
+        out["workbench_coupon"] = coupon_labels
+    return out
+
+
+def _section6_unique_options(df: pd.DataFrame, column: str, *, coupon_sort: bool = False) -> list[str]:
+    if df.empty or column not in df.columns:
+        return []
+    values = [
+        str(v)
+        for v in df[column].dropna().astype(str).unique().tolist()
+        if str(v).strip() and str(v).strip().lower() not in {"nan", "none", "unknown", "<na>"}
+    ]
+    if coupon_sort:
+        return sorted(values, key=_section6_coupon_sort_key)
+    return sorted(values)
+
+
+def _render_section6_filters(section2_market_df: pd.DataFrame, selected_issuer: str) -> dict:
+    option_source = section2_market_df.copy()
+    if "issuer" in option_source.columns:
+        issuer_source = option_source[option_source["issuer"].astype(str) == str(selected_issuer)].copy()
+        if not issuer_source.empty:
+            option_source = issuer_source
+
+    st.caption("Section 6 starts with Section 2 filters; these controls narrow advanced analysis independently.")
+    c1, c2, c3 = st.columns([1, 1, 1.25])
+    with c1:
+        all_years = st.checkbox("Section 6 All Maturity Years", value=True, key="section6_all_maturity_years")
+        if all_years:
+            maturity_labels: list[str] = []
+        else:
+            current_years = [
+                label for label in st.session_state.get("section6_maturity_years", []) if label in SECTION6_MATURITY_YEAR_OPTIONS
+            ]
+            st.session_state["section6_maturity_years"] = current_years
+            maturity_labels = st.multiselect(
+                "Section 6 Maturity Years",
+                SECTION6_MATURITY_YEAR_OPTIONS,
+                key="section6_maturity_years",
+                placeholder="Choose one or more years",
+            )
+
+    coupon_options = _section6_unique_options(option_source, "workbench_coupon", coupon_sort=True)
+    with c2:
+        all_coupons = st.checkbox("Section 6 All Coupons", value=True, key="section6_all_coupons", disabled=not coupon_options)
+        if all_coupons or not coupon_options:
+            coupon_values: tuple[str, ...] = ()
+        else:
+            current_coupons = [value for value in st.session_state.get("section6_coupon_values", []) if value in coupon_options]
+            st.session_state["section6_coupon_values"] = current_coupons
+            coupon_values = tuple(
+                st.multiselect(
+                    "Section 6 Coupon",
+                    coupon_options,
+                    key="section6_coupon_values",
+                    placeholder="Choose coupon values",
+                )
+            )
+
+    cusip_options = _section6_unique_options(option_source, "cusip")
+    with c3:
+        all_cusips = st.checkbox("Section 6 All CUSIPs", value=True, key="section6_all_cusips", disabled=not cusip_options)
+        if all_cusips or not cusip_options:
+            cusips: tuple[str, ...] = ()
+        else:
+            current_cusips = [value for value in st.session_state.get("section6_cusips", []) if value in cusip_options]
+            st.session_state["section6_cusips"] = current_cusips
+            cusips = tuple(
+                st.multiselect(
+                    "Section 6 CUSIP",
+                    cusip_options,
+                    key="section6_cusips",
+                    placeholder="Choose one or more CUSIPs",
+                )
+            )
+
+    maturity_years = tuple(int(str(label).replace("Y", "")) for label in maturity_labels)
+    return {
+        "maturity_years": maturity_years,
+        "maturity_labels": tuple(maturity_labels),
+        "coupon_values": coupon_values,
+        "cusips": cusips,
+    }
+
+
+def _apply_section6_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
+    out = _section6_ensure_filter_columns(df)
+    if out.empty:
+        return out
+    maturity_years = tuple(filters.get("maturity_years") or ())
+    if maturity_years and "workbench_maturity_year" in out.columns:
+        years = pd.to_numeric(out["workbench_maturity_year"], errors="coerce")
+        out = out[years.isin(list(maturity_years))].copy()
+    coupon_values = tuple(filters.get("coupon_values") or ())
+    if coupon_values and "workbench_coupon" in out.columns:
+        out = out[out["workbench_coupon"].astype(str).isin([str(x) for x in coupon_values])].copy()
+    cusips = tuple(filters.get("cusips") or ())
+    if cusips and "cusip" in out.columns:
+        out = out[out["cusip"].astype(str).isin([str(x) for x in cusips])].copy()
+    return out
+
+
 # Focused upload helpers live in ui/upload.py; shared card helpers live in ui/common.py.
 
 
@@ -1659,29 +1833,51 @@ def render_advanced_audit_gateway(
     safe_issuer = html.escape(str(selected_issuer or "Selected issuer"), quote=True)
     safe_sector = html.escape(str(selected_sector or "Unknown"), quote=True)
     safe_benchmark = html.escape(str(benchmark_source_mode or "Unknown"), quote=True)
-    universe_rows = len(filtered_market_df) if isinstance(filtered_market_df, pd.DataFrame) else 0
-    issuer_rows = len(filtered_issuer_df) if isinstance(filtered_issuer_df, pd.DataFrame) else 0
-    universe_cusips = _scope_nunique(filtered_market_df, "cusip")
-    issuer_cusips = _scope_nunique(filtered_issuer_df, "cusip")
-    date_scope = html.escape(_scope_date_text(workbench_selection, filtered_market_df), quote=True)
-    maturity_scope = html.escape(_scope_attr(workbench_selection, "maturity_bucket", "All"), quote=True)
-    size_scope = html.escape(_scope_attr(workbench_selection, "trade_size_bucket", "All"), quote=True)
-    type_scope = html.escape(_scope_attr(workbench_selection, "trade_type_bucket", "All"), quote=True)
-    lot_scope = html.escape(_scope_attr(workbench_selection, "lot_bucket", "All"), quote=True)
+    section2_market_df = _section6_ensure_filter_columns(filtered_market_df)
+    if section2_market_df.empty and isinstance(filtered_issuer_df, pd.DataFrame):
+        section2_market_df = _section6_ensure_filter_columns(filtered_issuer_df)
     section_anchor("advanced-analysis", "6. Advanced Analysis")
     st.markdown(
         f"""
 <div class="focus-band">
-  <b>Active scope:</b> Section 6 and the advanced modules below use the filtered universe from Section 2. &nbsp; | &nbsp;
+  <b>Active scope:</b> Section 6 and the advanced modules below start from Section 2, then apply the independent Section 6 filters here. &nbsp; | &nbsp;
   <b>Issuer:</b> {safe_issuer} &nbsp; | &nbsp;
   <b>Sector:</b> {safe_sector} &nbsp; | &nbsp;
   <b>Benchmark:</b> {safe_benchmark}
 </div>
+""",
+        unsafe_allow_html=True,
+    )
+    section6_filters = _render_section6_filters(section2_market_df, selected_issuer)
+    section6_market_df = _apply_section6_filters(section2_market_df, section6_filters)
+    if "issuer" in section6_market_df.columns:
+        section6_issuer_df = section6_market_df[section6_market_df["issuer"].astype(str) == str(selected_issuer)].copy()
+    else:
+        section6_issuer_df = section6_market_df.copy()
+
+    universe_rows = len(section6_market_df) if isinstance(section6_market_df, pd.DataFrame) else 0
+    issuer_rows = len(section6_issuer_df) if isinstance(section6_issuer_df, pd.DataFrame) else 0
+    universe_cusips = _scope_nunique(section6_market_df, "cusip")
+    issuer_cusips = _scope_nunique(section6_issuer_df, "cusip")
+    date_scope = html.escape(_scope_date_text(workbench_selection, filtered_market_df), quote=True)
+    maturity_scope = html.escape(
+        _section6_filter_label(section6_filters.get("maturity_labels", ()), _scope_attr(workbench_selection, "maturity_bucket", "All")),
+        quote=True,
+    )
+    coupon_scope = html.escape(_section6_filter_label(section6_filters.get("coupon_values", ()), "All"), quote=True)
+    cusip_scope = html.escape(_section6_filter_label(section6_filters.get("cusips", ()), "All"), quote=True)
+    size_scope = html.escape(_scope_attr(workbench_selection, "trade_size_bucket", "All"), quote=True)
+    type_scope = html.escape(_scope_attr(workbench_selection, "trade_type_bucket", "All"), quote=True)
+    lot_scope = html.escape(_scope_attr(workbench_selection, "lot_bucket", "All"), quote=True)
+    st.markdown(
+        f"""
 <div class="scope-chip-row">
   <div class="scope-chip"><b>Universe</b> {universe_rows:,} rows / {universe_cusips:,} CUSIPs</div>
   <div class="scope-chip"><b>Issuer</b> {issuer_rows:,} rows / {issuer_cusips:,} CUSIPs</div>
   <div class="scope-chip"><b>Date</b> {date_scope}</div>
   <div class="scope-chip"><b>Maturity</b> {maturity_scope}</div>
+  <div class="scope-chip"><b>Coupon</b> {coupon_scope}</div>
+  <div class="scope-chip"><b>CUSIP</b> {cusip_scope}</div>
   <div class="scope-chip"><b>Size</b> {size_scope}</div>
   <div class="scope-chip"><b>Type</b> {type_scope}</div>
   <div class="scope-chip"><b>Lot</b> {lot_scope}</div>
@@ -1703,6 +1899,11 @@ def render_advanced_audit_gateway(
 """,
             unsafe_allow_html=True,
         )
+    return {
+        "filters": section6_filters,
+        "filtered_market_df": section6_market_df,
+        "filtered_issuer_df": section6_issuer_df,
+    }
 
 
 # Focused watchlist helpers live in ui/watchlist_state.py.
@@ -2478,7 +2679,7 @@ if not issuer_trades.empty and trade_date_filter_enabled and selected_trade_date
             & (pd.to_datetime(issuer_trades["trade_date"], errors="coerce").dt.date <= _end_date)
         ].copy()
 
-render_advanced_audit_gateway(
+advanced_scope_state = render_advanced_audit_gateway(
     files_loaded=len(trade_payloads),
     issuers_loaded=len(uploaded_issuers),
     selected_issuer=selected_issuer,
@@ -2489,6 +2690,27 @@ render_advanced_audit_gateway(
     filtered_issuer_df=workbench_filtered_issuer if isinstance(workbench_filtered_issuer, pd.DataFrame) else issuer_trades,
 )
 
+if isinstance(advanced_scope_state, dict):
+    scoped_market_df = advanced_scope_state.get("filtered_market_df")
+    scoped_issuer_df = advanced_scope_state.get("filtered_issuer_df")
+    if isinstance(scoped_market_df, pd.DataFrame):
+        market_df = scoped_market_df.copy()
+        if "issuer" in market_df.columns:
+            uploaded_issuers = sorted(market_df["issuer"].dropna().astype(str).unique().tolist())
+            if selected_issuer and selected_issuer not in uploaded_issuers:
+                uploaded_issuers = [selected_issuer] + uploaded_issuers
+    if isinstance(scoped_issuer_df, pd.DataFrame):
+        issuer_trades = scoped_issuer_df.copy()
+
+    if isinstance(market_df, pd.DataFrame) and "cusip" in market_df.columns:
+        scoped_cusips = set(market_df["cusip"].dropna().astype(str))
+        if "cusip" in filtered_bonds_df.columns:
+            filtered_bonds_df = filtered_bonds_df[filtered_bonds_df["cusip"].astype(str).isin(scoped_cusips)].copy()
+        if "cusip" in issuer_bonds.columns:
+            issuer_bonds = issuer_bonds[issuer_bonds["cusip"].astype(str).isin(scoped_cusips)].copy()
+
+peer_options_sidebar = [x for x in uploaded_issuers if x != selected_issuer]
+comparison_issuers_sidebar = [x for x in comparison_issuers_sidebar if x in peer_options_sidebar]
 
 # Data Quality Scorecard removed for trade-only workflow.
 # The dashboard now relies on the File Readiness Check and Data Health sidebar metrics.
@@ -2821,23 +3043,33 @@ This section groups uploaded trade rows by **trade date** and **issuer**, then p
             start_date, end_date = selected_dates
             chart_df = chart_df[(chart_df["trade_date"].dt.date >= start_date) & (chart_df["trade_date"].dt.date <= end_date)].copy()
 
-        daily = (
-            chart_df.groupby(["trade_date", "issuer"], as_index=False)
-            .agg(avg_yield=("yield", "mean"), trade_count=("yield", "count"), total_trade_amount=("trade_amount", "sum"))
-        )
-        fig = px.line(
-            daily.sort_values("trade_date"),
-            x="trade_date",
-            y="avg_yield",
-            color="issuer",
-            markers=True,
-            hover_data=["trade_count", "total_trade_amount"],
-            title="Average Trade Yield by Issuer",
-        )
+        chart_df["trade_date"] = pd.to_datetime(chart_df["trade_date"], errors="coerce").dt.normalize()
+        chart_df = chart_df.dropna(subset=["trade_date"])
+        chart_df = chart_df[chart_df["trade_date"].dt.dayofweek < 5].copy()
+
+        if chart_df.empty:
+            st.warning("No weekday trade data found for the selected comparison filters.")
+            daily = pd.DataFrame()
+            fig = go.Figure()
+        else:
+            daily = (
+                chart_df.groupby(["trade_date", "issuer"], as_index=False)
+                .agg(avg_yield=("yield", "mean"), trade_count=("yield", "count"), total_trade_amount=("trade_amount", "sum"))
+            )
+            fig = px.line(
+                daily.sort_values("trade_date"),
+                x="trade_date",
+                y="avg_yield",
+                color="issuer",
+                markers=True,
+                hover_data=["trade_count", "total_trade_amount"],
+                title="Average Trade Yield by Issuer",
+            )
+            fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
 
         benchmark_daily = pd.DataFrame()
         benchmark_ready = False
-        if not mmd_df.empty and benchmark_ratings:
+        if not daily.empty and not mmd_df.empty and benchmark_ratings:
             date_col = _detect_mmd_date_column(mmd_df)
             mmd_col = MMD_BUCKET_MAP.get(compare_bucket, "10Y")
             if date_col:
@@ -2881,8 +3113,9 @@ This section groups uploaded trade rows by **trade date** and **issuer**, then p
             else:
                 st.warning("Benchmark curves could not be plotted because the curve file does not contain a usable date column.")
 
-        fig.update_layout(xaxis_title="Trade Date", yaxis_title="Yield (%)", hovermode="x unified")
-        safe_plotly_chart(fig, width="stretch")
+        if fig.data:
+            fig.update_layout(xaxis_title="Trade Date", yaxis_title="Yield (%)", hovermode="x unified")
+            safe_plotly_chart(fig, width="stretch")
 
         if show_spread_to_benchmark and benchmark_ready and not daily.empty:
             spread_base = daily.copy()
@@ -2905,6 +3138,7 @@ This section groups uploaded trade rows by **trade date** and **issuer**, then p
                     title="Issuer Spread to Selected Benchmark Curve(s)",
                 )
                 spread_fig.update_layout(xaxis_title="Trade Date", yaxis_title="Spread to Benchmark (bps)", hovermode="x unified")
+                spread_fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
                 safe_plotly_chart(spread_fig, width="stretch")
 
                 with st.expander("Spread-to-benchmark calculation details", expanded=False):
