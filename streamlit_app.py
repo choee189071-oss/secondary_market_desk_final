@@ -2307,35 +2307,6 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     sidebar_status_card("Mode", "Trading Workbench", "Controls live in the main page.")
-    with st.expander("System", expanded=False):
-        PERFORMANCE_MODE = st.checkbox(
-            "Fast mode",
-            value=True,
-            help="Caches heavy calculations, limits displayed rows, and keeps ladders readable.",
-        )
-        MAX_TABLE_ROWS = st.number_input(
-            "Max table rows shown",
-            min_value=500,
-            max_value=20000,
-            value=3000,
-            step=500,
-            help="Only limits displayed tables; underlying analytics still use the full filtered dataset.",
-        )
-        MAX_HEATMAP_ROWS = st.slider(
-            "Max ladder maturity rows",
-            min_value=8,
-            max_value=40,
-            value=18,
-            help="Fast mode keeps the maturity years with the largest absolute signal.",
-        )
-        SHOW_FULL_RAW_TABLES = st.checkbox(
-            "Show full raw tables",
-            value=False,
-            help="Usually keep this off. Full raw tables are one of the biggest Streamlit slowdowns.",
-        )
-        if st.button("Clear cached calculations"):
-            st.cache_data.clear()
-            st.rerun()
 
 with st.expander(
     "Upload Center",
@@ -2604,35 +2575,6 @@ with st.sidebar:
         else:
             st.caption("No linked peer issuers matched the active filters.")
 
-    sidebar_section_label("Benchmark")
-    sidebar_status_card("Active source", benchmark_source_mode, benchmark_conflict_policy)
-
-    sector_options = [
-        "Unknown", "General Government", "State GO", "Local Government",
-        "Utilities", "Water / Sewer", "Power", "Transportation", "Airport",
-        "Education", "School District", "Healthcare", "Housing",
-        "Public Finance Authority", "Other",
-    ]
-    current_sector_sidebar = st.session_state.get("issuer_sector_overrides", {}).get(selected_issuer, "Unknown")
-    if current_sector_sidebar == "Unknown" and "sector" in market_df.columns:
-        vals = market_df.loc[market_df["issuer"] == selected_issuer, "sector"].dropna().astype(str).unique().tolist()
-        vals = [v for v in vals if v and v.lower() != "nan"]
-        if vals:
-            current_sector_sidebar = vals[0]
-
-    with st.expander("Issuer settings", expanded=(current_sector_sidebar == "Unknown")):
-        default_idx = sector_options.index(current_sector_sidebar) if current_sector_sidebar in sector_options else 0
-        selected_sector_input = st.selectbox("Sector", sector_options, index=default_idx, key=f"sector_select_{selected_issuer}")
-        custom_sector_input = st.text_input(
-            "Custom sector",
-            value="" if selected_sector_input != "Other" else current_sector_sidebar,
-            key=f"sector_custom_{selected_issuer}",
-        )
-        final_sector_input = custom_sector_input.strip() if selected_sector_input == "Other" and custom_sector_input.strip() else selected_sector_input
-        if st.button("Apply sector", key=f"apply_sector_{selected_issuer}"):
-            st.session_state.setdefault("issuer_sector_overrides", {})[selected_issuer] = final_sector_input
-            st.success(f"Applied: {selected_issuer} -> {final_sector_input}")
-
     with st.expander("Audit display", expanded=False):
         show_raw_tables = st.checkbox(
             "Show raw tables",
@@ -2658,40 +2600,6 @@ with st.sidebar:
 """,
             unsafe_allow_html=True,
         )
-
-    with st.expander("Data health", expanded=False):
-        if not market_df.empty and "trade_date" in market_df.columns:
-            trade_dates = pd.to_datetime(market_df["trade_date"], errors="coerce").dropna()
-            if not trade_dates.empty:
-                earliest_trade = trade_dates.min()
-                latest_trade = trade_dates.max()
-                sidebar_status_card("Coverage", f"{earliest_trade:%m/%d/%Y} to {latest_trade:%m/%d/%Y}")
-            else:
-                sidebar_status_card("Coverage", "No valid trade dates")
-        else:
-            sidebar_status_card("Coverage", "No trade data loaded")
-
-        total_rows = len(market_df)
-        if total_rows > 0 and "cusip" in market_df.columns:
-            valid_cusip_count = market_df["cusip"].notna().sum()
-            valid_cusip_rate = valid_cusip_count / total_rows * 100
-        else:
-            valid_cusip_rate = 0
-        missing_issuers = market_df["issuer"].isna().sum() if "issuer" in market_df.columns else total_rows
-        sidebar_status_card("CUSIP quality", f"{valid_cusip_rate:.1f}% valid")
-        sidebar_status_card("Missing issuers", f"{missing_issuers:,}")
-        sidebar_status_card("Duplicates removed", f"{duplicates_removed:,}")
-
-        with st.expander("Methodology", expanded=False):
-            st.markdown(
-                """
-- Coverage uses the earliest and latest valid trade dates after standardization.
-- Trades loaded counts rows available for analytics.
-- CUSIP quality is the share of rows with a usable CUSIP.
-- Missing issuers counts rows without issuer after inference and mapping.
-- Duplicates removed counts exact duplicate standardized trade rows.
-                """
-            )
 
     with st.expander("Version", expanded=False):
         st.markdown(

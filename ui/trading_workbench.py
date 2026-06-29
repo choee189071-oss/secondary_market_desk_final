@@ -674,13 +674,12 @@ def _render_inspector_css():
         """
 <style>
 .inspector-panel {
-  position: sticky;
-  top: 0.75rem;
+  position: relative;
   background: #ffffff;
   border: 1px solid #dbe3ee;
   border-radius: 14px;
-  padding: 14px 14px 12px 14px;
-  margin-top: 2px;
+  padding: 14px 12px 12px 12px;
+  margin: 12px 0 10px 0;
 }
 .inspector-kicker {
   color: #64748b;
@@ -715,11 +714,9 @@ def _render_inspector_css():
   margin-bottom: 6px;
 }
 .inspector-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
+  display: block;
   border-left: 4px solid #cbd5e1;
-  padding: 6px 0 6px 8px;
+  padding: 7px 0 7px 9px;
 }
 .inspector-row.status-good { border-left-color: #15803d; }
 .inspector-row.status-warn { border-left-color: #ca8a04; }
@@ -733,8 +730,9 @@ def _render_inspector_css():
   color: #111827;
   font-size: 0.82rem;
   font-weight: 760;
-  text-align: right;
+  text-align: left;
   overflow-wrap: anywhere;
+  margin-top: 2px;
 }
 .inspector-chip {
   display: inline-block;
@@ -838,7 +836,7 @@ def _render_right_inspector(
     st.markdown(
         f"""
 <div class="inspector-panel">
-  <div class="inspector-kicker">Right-Side Inspector</div>
+  <div class="inspector-kicker">Inspector</div>
   <div class="inspector-title">{_html_escape(object_title)}</div>
   <div class="inspector-subtitle">{_html_escape(object_subtitle)}</div>
   <span class="inspector-chip">Issuer object</span>
@@ -871,22 +869,19 @@ def _render_right_inspector(
         placeholder="Analyst note, evidence check, or next question.",
     )
     if security_profile:
-        c1, c2 = st.columns(2)
         status_options = WATCHLIST_STAGE_OPTIONS
         current_status = security_profile.watchlist_status if security_profile.watchlist_status in status_options else "New"
-        with c1:
-            status = st.selectbox(
-                "Status",
-                status_options,
-                index=status_options.index(current_status),
-                key=f"workbench_inspector_status_{security_profile.cusip}",
-            )
-        with c2:
-            next_step = st.text_input(
-                "Next",
-                key=f"workbench_inspector_next_{security_profile.cusip}",
-                placeholder="Verify / call / monitor",
-            )
+        status = st.selectbox(
+            "Status",
+            status_options,
+            index=status_options.index(current_status),
+            key=f"workbench_inspector_status_{security_profile.cusip}",
+        )
+        next_step = st.text_input(
+            "Next",
+            key=f"workbench_inspector_next_{security_profile.cusip}",
+            placeholder="Verify / call / monitor",
+        )
         if st.button("Save CUSIP", key=f"workbench_inspector_save_{security_profile.cusip}"):
             row_match = summary[summary["cusip"].astype(str) == str(security_profile.cusip)] if not summary.empty and "cusip" in summary.columns else pd.DataFrame()
             row = row_match.iloc[0] if not row_match.empty else {
@@ -903,7 +898,7 @@ def _render_right_inspector(
             _upsert_focused_watchlist(
                 security_profile.cusip,
                 selection.issuer,
-                "Right-Side Inspector",
+                "Sidebar Inspector",
                 row,
                 note,
                 status=status,
@@ -1237,13 +1232,13 @@ def _render_activity_concentration_map(filtered_df: pd.DataFrame):
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_layout(
             height=430,
+            showlegend=False,
             xaxis_title="Par Amount ($MM)" if metric_col == "par_amount" else "Trade Count",
             yaxis_title="",
             yaxis=dict(categoryorder="array", categoryarray=chart_df["band_label"].tolist(), automargin=True),
-            legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0, title_text="Maturity"),
-            legend_font=dict(size=11),
-            margin=dict(l=8, r=82, t=16, b=88),
+            margin=dict(l=8, r=82, t=16, b=44),
         )
+        fig.update_xaxes(tickangle=0)
         safe_plotly_chart(fig, width="stretch")
 
 
@@ -1780,21 +1775,19 @@ def render_trading_workbench(
         _render_participation(filtered_issuer)
     _render_liquidity_dashboard(filtered_issuer)
 
-    detail_col, right_col = st.columns([0.72, 0.28], gap="large")
-    with detail_col:
-        security_detail = _render_security_drilldown(filtered_issuer)
-        cusip_summary = _build_cusip_summary(filtered_issuer)
-        peer_metrics, peer_issuers = _render_peer_comparison(prepared, selection, filtered_issuer)
+    security_detail = _render_security_drilldown(filtered_issuer)
+    cusip_summary = _build_cusip_summary(filtered_issuer)
+    peer_metrics, peer_issuers = _render_peer_comparison(prepared, selection, filtered_issuer)
 
-        section_anchor("workbench-narrative-insights", "5B. Narrative Read-Through")
-        observations = _build_narrative(filtered_issuer, security_detail, selection)
-        for obs in observations:
-            st.markdown(f"<div class='methodology-note'>{_html_escape(obs)}</div>", unsafe_allow_html=True)
+    section_anchor("workbench-narrative-insights", "5B. Narrative Read-Through")
+    observations = _build_narrative(filtered_issuer, security_detail, selection)
+    for obs in observations:
+        st.markdown(f"<div class='methodology-note'>{_html_escape(obs)}</div>", unsafe_allow_html=True)
 
     selected_cusip = _best_cusip_for_profile(filtered_issuer, cusip_summary)
     issuer_profile = _build_issuer_profile(filtered_issuer, selection, benchmark_source_mode)
     security_profile = _build_security_profile(filtered_issuer, cusip_summary, selected_cusip, selected_issuer)
-    with right_col:
+    with st.sidebar:
         _render_right_inspector(selection, issuer_profile, security_profile, cusip_summary)
 
     return {
