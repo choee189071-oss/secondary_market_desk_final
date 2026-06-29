@@ -403,6 +403,7 @@ def _participant_group(value: object) -> str:
     return "Other / Unknown"
 
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def prepare_workbench_data(market_df: pd.DataFrame) -> pd.DataFrame:
     base = add_workflow_spread_bps(market_df.copy())
     if base.empty:
@@ -1608,118 +1609,126 @@ def render_trading_workbench(
                 date_range = (pd.Timestamp(custom[0]), pd.Timestamp(custom[1]))
 
     section_anchor("workbench-trading-filters", "2. Trading Filters")
-    mf1, mf2, mf3 = st.columns([1, 1, 1.25])
-    with mf1:
-        all_maturity_years = st.checkbox("All Maturity Years", value=True, key="workbench_all_maturity_years")
-        maturity_year_labels: tuple[str, ...] = ()
-        with st.expander("Choose Maturity Years", expanded=not all_maturity_years):
-            if all_maturity_years:
-                st.caption("Uncheck All Maturity Years to select individual years.")
-            else:
-                current_year_labels = [
-                    label for label in st.session_state.get("workbench_maturity_years", []) if label in MATURITY_YEAR_OPTIONS
-                ]
-                maturity_year_labels = _checkbox_filter_grid(
-                    "workbench_maturity_year",
-                    MATURITY_YEAR_OPTIONS,
-                    current_year_labels,
-                    columns=5,
-                )
-                st.session_state["workbench_maturity_years"] = list(maturity_year_labels)
-        maturity_years = tuple(int(str(label).replace("Y", "")) for label in maturity_year_labels)
-        maturity_bucket = _filter_summary_label(tuple(maturity_year_labels), "All")
-
+    st.caption("Set one or more filters, then apply them together to avoid reloading after every checkbox.")
     coupon_available = _has_filter_values(issuer_base, "workbench_coupon")
-    with mf2:
-        all_coupons = st.checkbox("All Coupons", value=True, key="workbench_all_coupons", disabled=not coupon_available)
-        coupon_values: tuple[str, ...] = ()
-        with st.expander("Choose Coupons", expanded=not all_coupons and coupon_available):
-            if not coupon_available:
-                st.caption("No coupon values are available for this issuer.")
-            elif all_coupons:
-                st.caption("Uncheck All Coupons to select individual coupon values.")
-            else:
-                coupon_search = st.text_input(
-                    "Search Coupon",
-                    key="workbench_coupon_search",
-                    placeholder="Optional",
-                )
-                coupon_options, coupon_limited = _search_filter_options(
-                    issuer_base,
-                    "workbench_coupon",
-                    coupon_search,
-                    sort_key=_coupon_sort_key,
-                )
-                current_coupons = _filter_existing_values(
-                    issuer_base,
-                    "workbench_coupon",
-                    st.session_state.get("workbench_coupon_values", []),
-                )
-                coupon_options = list(dict.fromkeys(current_coupons + coupon_options))
-                coupon_values = _checkbox_filter_grid(
-                    "workbench_coupon_value",
-                    coupon_options,
-                    current_coupons,
-                    columns=4,
-                )
-                st.session_state["workbench_coupon_values"] = list(coupon_values)
-                if coupon_limited:
-                    st.caption(f"Showing first {MAX_DYNAMIC_FILTER_OPTIONS:,} coupon matches. Type to narrow.")
-
     cusip_available = _has_filter_values(issuer_base, "cusip")
-    with mf3:
-        all_cusips = st.checkbox("All CUSIPs", value=True, key="workbench_all_cusips", disabled=not cusip_available)
-        cusips: tuple[str, ...] = ()
-        with st.expander("Choose CUSIPs", expanded=not all_cusips and cusip_available):
-            if not cusip_available:
-                st.caption("No CUSIPs are available for this issuer.")
-            elif all_cusips:
-                st.caption("Uncheck All CUSIPs, then search to select one or more CUSIPs.")
-            else:
-                cusip_search = st.text_input(
-                    "Search CUSIP",
-                    key="workbench_cusip_search",
-                    placeholder="Type at least 2 characters",
-                )
-                current_cusips = _filter_existing_values(
-                    issuer_base,
-                    "cusip",
-                    st.session_state.get("workbench_cusips", []),
-                )
-                if len(str(cusip_search or "").strip()) >= 2:
-                    cusip_matches, cusip_limited = _search_filter_options(issuer_base, "cusip", cusip_search)
+    with st.form("workbench_trading_filter_form", border=False):
+        mf1, mf2, mf3 = st.columns([1, 1, 1.25])
+        with mf1:
+            all_maturity_years = st.checkbox("All Maturity Years", value=True, key="workbench_all_maturity_years")
+            maturity_year_labels: tuple[str, ...] = ()
+            with st.expander("Choose Maturity Years", expanded=not all_maturity_years):
+                if all_maturity_years:
+                    st.caption("Uncheck All Maturity Years to select individual years.")
                 else:
-                    cusip_matches, cusip_limited = [], False
-                cusip_options = list(dict.fromkeys(current_cusips + cusip_matches))
-                if not cusip_options:
-                    st.caption("Type at least 2 CUSIP characters to load matching choices.")
-                    cusips = ()
-                else:
-                    cusips = _checkbox_filter_grid(
-                        "workbench_cusip_value",
-                        cusip_options,
-                        current_cusips,
-                        columns=3,
+                    current_year_labels = [
+                        label for label in st.session_state.get("workbench_maturity_years", []) if label in MATURITY_YEAR_OPTIONS
+                    ]
+                    maturity_year_labels = _checkbox_filter_grid(
+                        "workbench_maturity_year",
+                        MATURITY_YEAR_OPTIONS,
+                        current_year_labels,
+                        columns=5,
                     )
-                    st.session_state["workbench_cusips"] = list(cusips)
-                    if cusip_limited:
-                        st.caption(f"Showing first {MAX_DYNAMIC_FILTER_OPTIONS:,} CUSIP matches. Type more to narrow.")
+                    st.session_state["workbench_maturity_years"] = list(maturity_year_labels)
+            maturity_years = tuple(int(str(label).replace("Y", "")) for label in maturity_year_labels)
+            maturity_bucket = _filter_summary_label(tuple(maturity_year_labels), "All")
 
-    f1, f2, f3 = st.columns(3)
-    with f1:
-        if st.session_state.get("workbench_trade_size_bucket") not in TRADE_SIZE_BUCKETS:
-            st.session_state["workbench_trade_size_bucket"] = "All"
-        trade_size_bucket = st.selectbox("Trade Size Filters", TRADE_SIZE_BUCKETS, key="workbench_trade_size_bucket")
-    with f2:
-        observed_types = [x for x in TRADE_TYPE_BUCKETS if x == "All" or x in issuer_base["trade_type_bucket"].unique()]
-        trade_type_options = observed_types or TRADE_TYPE_BUCKETS
-        if st.session_state.get("workbench_trade_type_bucket") not in trade_type_options:
-            st.session_state["workbench_trade_type_bucket"] = "All"
-        trade_type_bucket = st.selectbox("Trade Type Filters", trade_type_options, key="workbench_trade_type_bucket")
-    with f3:
-        if st.session_state.get("workbench_lot_bucket") not in LOT_BUCKETS:
-            st.session_state["workbench_lot_bucket"] = "All"
-        lot_bucket = st.selectbox("Lot / Block Filter", LOT_BUCKETS, key="workbench_lot_bucket")
+        with mf2:
+            all_coupons = st.checkbox("All Coupons", value=True, key="workbench_all_coupons", disabled=not coupon_available)
+            coupon_values: tuple[str, ...] = ()
+            with st.expander("Choose Coupons", expanded=not all_coupons and coupon_available):
+                if not coupon_available:
+                    st.caption("No coupon values are available for this issuer.")
+                elif all_coupons:
+                    st.caption("Uncheck All Coupons to select individual coupon values.")
+                else:
+                    coupon_search = st.text_input(
+                        "Search Coupon",
+                        key="workbench_coupon_search",
+                        placeholder="Optional",
+                    )
+                    coupon_options, coupon_limited = _search_filter_options(
+                        issuer_base,
+                        "workbench_coupon",
+                        coupon_search,
+                        sort_key=_coupon_sort_key,
+                    )
+                    current_coupons = _filter_existing_values(
+                        issuer_base,
+                        "workbench_coupon",
+                        st.session_state.get("workbench_coupon_values", []),
+                    )
+                    coupon_options = list(dict.fromkeys(current_coupons + coupon_options))
+                    coupon_values = _checkbox_filter_grid(
+                        "workbench_coupon_value",
+                        coupon_options,
+                        current_coupons,
+                        columns=4,
+                    )
+                    st.session_state["workbench_coupon_values"] = list(coupon_values)
+                    if coupon_limited:
+                        st.caption(f"Showing first {MAX_DYNAMIC_FILTER_OPTIONS:,} coupon matches. Type to narrow.")
+
+        with mf3:
+            all_cusips = st.checkbox("All CUSIPs", value=True, key="workbench_all_cusips", disabled=not cusip_available)
+            cusips: tuple[str, ...] = ()
+            with st.expander("Choose CUSIPs", expanded=not all_cusips and cusip_available):
+                if not cusip_available:
+                    st.caption("No CUSIPs are available for this issuer.")
+                elif all_cusips:
+                    st.caption("Uncheck All CUSIPs, then search to select one or more CUSIPs.")
+                else:
+                    cusip_search = st.text_input(
+                        "Search CUSIP",
+                        key="workbench_cusip_search",
+                        placeholder="Type at least 2 characters",
+                    )
+                    current_cusips = _filter_existing_values(
+                        issuer_base,
+                        "cusip",
+                        st.session_state.get("workbench_cusips", []),
+                    )
+                    if len(str(cusip_search or "").strip()) >= 2:
+                        cusip_matches, cusip_limited = _search_filter_options(issuer_base, "cusip", cusip_search)
+                    else:
+                        cusip_matches, cusip_limited = [], False
+                    cusip_options = list(dict.fromkeys(current_cusips + cusip_matches))
+                    if not cusip_options:
+                        st.caption("Type at least 2 CUSIP characters to load matching choices.")
+                        cusips = ()
+                    else:
+                        cusips = _checkbox_filter_grid(
+                            "workbench_cusip_value",
+                            cusip_options,
+                            current_cusips,
+                            columns=3,
+                        )
+                        st.session_state["workbench_cusips"] = list(cusips)
+                        if cusip_limited:
+                            st.caption(f"Showing first {MAX_DYNAMIC_FILTER_OPTIONS:,} CUSIP matches. Type more to narrow.")
+
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            if st.session_state.get("workbench_trade_size_bucket") not in TRADE_SIZE_BUCKETS:
+                st.session_state["workbench_trade_size_bucket"] = "All"
+            trade_size_bucket = st.selectbox("Trade Size Filters", TRADE_SIZE_BUCKETS, key="workbench_trade_size_bucket")
+        with f2:
+            observed_types = [x for x in TRADE_TYPE_BUCKETS if x == "All" or x in issuer_base["trade_type_bucket"].unique()]
+            trade_type_options = observed_types or TRADE_TYPE_BUCKETS
+            if st.session_state.get("workbench_trade_type_bucket") not in trade_type_options:
+                st.session_state["workbench_trade_type_bucket"] = "All"
+            trade_type_bucket = st.selectbox("Trade Type Filters", trade_type_options, key="workbench_trade_type_bucket")
+        with f3:
+            if st.session_state.get("workbench_lot_bucket") not in LOT_BUCKETS:
+                st.session_state["workbench_lot_bucket"] = "All"
+            lot_bucket = st.selectbox("Lot / Block Filter", LOT_BUCKETS, key="workbench_lot_bucket")
+
+        apply_col, note_col = st.columns([0.18, 0.82])
+        with apply_col:
+            st.form_submit_button("Apply filters", type="primary")
+        with note_col:
+            st.caption("CUSIP search also applies on submit; search first, apply, then select matching CUSIPs and apply again.")
 
     selection = WorkbenchSelection(
         sector=selected_sector,

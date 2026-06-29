@@ -384,6 +384,11 @@ def answer_dashboard_question_with_ai(
 from data_utils import read_uploaded_file
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
+def _read_uploaded_preview(file_name: str, payload: bytes) -> pd.DataFrame:
+    return read_uploaded_file(io.BytesIO(payload), file_name)
+
+
 st.set_page_config(page_title="Municipal Secondary Market Dashboard Generator", layout="wide")
 st.title("Municipal Secondary Market Dashboard Generator")
 st.caption("Bring your own MuniPro trade-history exports. Generate issuer-level relative value and liquidity analytics from the uploaded trade tape.")
@@ -1849,101 +1854,108 @@ def _render_section6_filters(section2_market_df: pd.DataFrame, selected_issuer: 
         if not issuer_source.empty:
             option_source = issuer_source
 
-    st.caption("Section 6 starts with Section 2 filters; these controls narrow advanced analysis independently.")
-    c1, c2, c3 = st.columns([1, 1, 1.25])
-    with c1:
-        all_years = st.checkbox("Section 6 All Maturity Years", value=True, key="section6_all_maturity_years")
-        maturity_labels: tuple[str, ...] = ()
-        with st.expander("Section 6 Choose Maturity Years", expanded=not all_years):
-            if all_years:
-                st.caption("Uncheck Section 6 All Maturity Years to select individual years.")
-            else:
-                current_years = [
-                    label for label in st.session_state.get("section6_maturity_years", []) if label in SECTION6_MATURITY_YEAR_OPTIONS
-                ]
-                maturity_labels = _section6_checkbox_grid(
-                    "section6_maturity_year",
-                    SECTION6_MATURITY_YEAR_OPTIONS,
-                    current_years,
-                    columns=5,
-                )
-                st.session_state["section6_maturity_years"] = list(maturity_labels)
-
+    st.caption("Section 6 starts with Section 2 filters; set advanced filters, then apply them together.")
     coupon_available = _section6_has_filter_values(option_source, "workbench_coupon")
-    with c2:
-        all_coupons = st.checkbox("Section 6 All Coupons", value=True, key="section6_all_coupons", disabled=not coupon_available)
-        coupon_values: tuple[str, ...] = ()
-        with st.expander("Section 6 Choose Coupons", expanded=not all_coupons and coupon_available):
-            if not coupon_available:
-                st.caption("No coupon values are available for this issuer.")
-            elif all_coupons:
-                st.caption("Uncheck Section 6 All Coupons to select individual coupon values.")
-            else:
-                coupon_search = st.text_input(
-                    "Section 6 Search Coupon",
-                    key="section6_coupon_search",
-                    placeholder="Optional",
-                )
-                coupon_options, coupon_limited = _section6_search_options(
-                    option_source,
-                    "workbench_coupon",
-                    coupon_search,
-                    sort_key=_section6_coupon_sort_key,
-                )
-                current_coupons = _section6_filter_existing_values(
-                    option_source,
-                    "workbench_coupon",
-                    st.session_state.get("section6_coupon_values", []),
-                )
-                coupon_options = list(dict.fromkeys(current_coupons + coupon_options))
-                coupon_values = _section6_checkbox_grid(
-                    "section6_coupon_value",
-                    coupon_options,
-                    current_coupons,
-                    columns=4,
-                )
-                st.session_state["section6_coupon_values"] = list(coupon_values)
-                if coupon_limited:
-                    st.caption(f"Showing first {SECTION6_MAX_DYNAMIC_FILTER_OPTIONS:,} coupon matches. Type to narrow.")
-
     cusip_available = _section6_has_filter_values(option_source, "cusip")
-    with c3:
-        all_cusips = st.checkbox("Section 6 All CUSIPs", value=True, key="section6_all_cusips", disabled=not cusip_available)
-        cusips: tuple[str, ...] = ()
-        with st.expander("Section 6 Choose CUSIPs", expanded=not all_cusips and cusip_available):
-            if not cusip_available:
-                st.caption("No CUSIPs are available for this issuer.")
-            elif all_cusips:
-                st.caption("Uncheck Section 6 All CUSIPs, then search to select one or more CUSIPs.")
-            else:
-                cusip_search = st.text_input(
-                    "Section 6 Search CUSIP",
-                    key="section6_cusip_search",
-                    placeholder="Type at least 2 characters",
-                )
-                current_cusips = _section6_filter_existing_values(
-                    option_source,
-                    "cusip",
-                    st.session_state.get("section6_cusips", []),
-                )
-                if len(str(cusip_search or "").strip()) >= 2:
-                    cusip_matches, cusip_limited = _section6_search_options(option_source, "cusip", cusip_search)
+    with st.form("section6_filter_form", border=False):
+        c1, c2, c3 = st.columns([1, 1, 1.25])
+        with c1:
+            all_years = st.checkbox("Section 6 All Maturity Years", value=True, key="section6_all_maturity_years")
+            maturity_labels: tuple[str, ...] = ()
+            with st.expander("Section 6 Choose Maturity Years", expanded=not all_years):
+                if all_years:
+                    st.caption("Uncheck Section 6 All Maturity Years to select individual years.")
                 else:
-                    cusip_matches, cusip_limited = [], False
-                cusip_options = list(dict.fromkeys(current_cusips + cusip_matches))
-                if not cusip_options:
-                    st.caption("Type at least 2 CUSIP characters to load matching choices.")
-                    cusips = ()
-                else:
-                    cusips = _section6_checkbox_grid(
-                        "section6_cusip_value",
-                        cusip_options,
-                        current_cusips,
-                        columns=3,
+                    current_years = [
+                        label for label in st.session_state.get("section6_maturity_years", []) if label in SECTION6_MATURITY_YEAR_OPTIONS
+                    ]
+                    maturity_labels = _section6_checkbox_grid(
+                        "section6_maturity_year",
+                        SECTION6_MATURITY_YEAR_OPTIONS,
+                        current_years,
+                        columns=5,
                     )
-                    st.session_state["section6_cusips"] = list(cusips)
-                    if cusip_limited:
-                        st.caption(f"Showing first {SECTION6_MAX_DYNAMIC_FILTER_OPTIONS:,} CUSIP matches. Type more to narrow.")
+                    st.session_state["section6_maturity_years"] = list(maturity_labels)
+
+        with c2:
+            all_coupons = st.checkbox("Section 6 All Coupons", value=True, key="section6_all_coupons", disabled=not coupon_available)
+            coupon_values: tuple[str, ...] = ()
+            with st.expander("Section 6 Choose Coupons", expanded=not all_coupons and coupon_available):
+                if not coupon_available:
+                    st.caption("No coupon values are available for this issuer.")
+                elif all_coupons:
+                    st.caption("Uncheck Section 6 All Coupons to select individual coupon values.")
+                else:
+                    coupon_search = st.text_input(
+                        "Section 6 Search Coupon",
+                        key="section6_coupon_search",
+                        placeholder="Optional",
+                    )
+                    coupon_options, coupon_limited = _section6_search_options(
+                        option_source,
+                        "workbench_coupon",
+                        coupon_search,
+                        sort_key=_section6_coupon_sort_key,
+                    )
+                    current_coupons = _section6_filter_existing_values(
+                        option_source,
+                        "workbench_coupon",
+                        st.session_state.get("section6_coupon_values", []),
+                    )
+                    coupon_options = list(dict.fromkeys(current_coupons + coupon_options))
+                    coupon_values = _section6_checkbox_grid(
+                        "section6_coupon_value",
+                        coupon_options,
+                        current_coupons,
+                        columns=4,
+                    )
+                    st.session_state["section6_coupon_values"] = list(coupon_values)
+                    if coupon_limited:
+                        st.caption(f"Showing first {SECTION6_MAX_DYNAMIC_FILTER_OPTIONS:,} coupon matches. Type to narrow.")
+
+        with c3:
+            all_cusips = st.checkbox("Section 6 All CUSIPs", value=True, key="section6_all_cusips", disabled=not cusip_available)
+            cusips: tuple[str, ...] = ()
+            with st.expander("Section 6 Choose CUSIPs", expanded=not all_cusips and cusip_available):
+                if not cusip_available:
+                    st.caption("No CUSIPs are available for this issuer.")
+                elif all_cusips:
+                    st.caption("Uncheck Section 6 All CUSIPs, then search to select one or more CUSIPs.")
+                else:
+                    cusip_search = st.text_input(
+                        "Section 6 Search CUSIP",
+                        key="section6_cusip_search",
+                        placeholder="Type at least 2 characters",
+                    )
+                    current_cusips = _section6_filter_existing_values(
+                        option_source,
+                        "cusip",
+                        st.session_state.get("section6_cusips", []),
+                    )
+                    if len(str(cusip_search or "").strip()) >= 2:
+                        cusip_matches, cusip_limited = _section6_search_options(option_source, "cusip", cusip_search)
+                    else:
+                        cusip_matches, cusip_limited = [], False
+                    cusip_options = list(dict.fromkeys(current_cusips + cusip_matches))
+                    if not cusip_options:
+                        st.caption("Type at least 2 CUSIP characters to load matching choices.")
+                        cusips = ()
+                    else:
+                        cusips = _section6_checkbox_grid(
+                            "section6_cusip_value",
+                            cusip_options,
+                            current_cusips,
+                            columns=3,
+                        )
+                        st.session_state["section6_cusips"] = list(cusips)
+                        if cusip_limited:
+                            st.caption(f"Showing first {SECTION6_MAX_DYNAMIC_FILTER_OPTIONS:,} CUSIP matches. Type more to narrow.")
+
+        apply_col, note_col = st.columns([0.2, 0.8])
+        with apply_col:
+            st.form_submit_button("Apply Section 6 filters", type="primary")
+        with note_col:
+            st.caption("Section 6 filters update only when submitted, so advanced charts do not rerun after every checkbox.")
 
     maturity_years = tuple(int(str(label).replace("Y", "")) for label in maturity_labels)
     return {
@@ -2415,7 +2427,7 @@ show_methodology_audit = False
 if show_file_audit:
     section_anchor("file-readiness", "File Readiness Check")
 if bond_payload is not None:
-    raw_bonds_preview = read_uploaded_file(io.BytesIO(bond_payload[1]), bond_payload[0])
+    raw_bonds_preview = _read_uploaded_preview(bond_payload[0], bond_payload[1])
     bond_report = validate_dataset(raw_bonds_preview, bond_payload[0], ["cusip"], BOND_RECOMMENDED, BOND_OPTIONAL)
     bond_warnings = validate_basic_values(raw_bonds_preview, bond_report["mapping"], dataset_type="bond")
     if show_file_audit:
@@ -2427,7 +2439,7 @@ trade_reports = []
 trade_blocking_failures = []
 for trade_name, trade_bytes in trade_payloads:
     try:
-        raw_trade_preview = read_uploaded_file(io.BytesIO(trade_bytes), trade_name)
+        raw_trade_preview = _read_uploaded_preview(trade_name, trade_bytes)
         report = validate_dataset(raw_trade_preview, trade_name, TRADE_REQUIRED, TRADE_RECOMMENDED, TRADE_OPTIONAL)
         warnings = validate_basic_values(raw_trade_preview, report["mapping"], dataset_type="trade")
         trade_reports.append(report)
@@ -2449,7 +2461,7 @@ if trade_blocking_failures:
 if mmd_payload is not None:
     try:
         mmd_name, mmd_bytes = mmd_payload
-        raw_mmd_preview = read_uploaded_file(io.BytesIO(mmd_bytes), mmd_name)
+        raw_mmd_preview = _read_uploaded_preview(mmd_name, mmd_bytes)
         mmd_report = validate_dataset(raw_mmd_preview, mmd_name, MMD_REQUIRED, MMD_RECOMMENDED, [])
         if show_file_audit:
             display_validation_report("MMD Curve File", mmd_report)
