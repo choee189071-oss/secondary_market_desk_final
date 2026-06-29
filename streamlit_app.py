@@ -6337,9 +6337,14 @@ This section combines recent trading behavior with relative-value positioning.
         """
         )
 
-    mn_tab1, mn_tab2 = st.tabs(["Trading Activity Timeline", "Rich / Cheap Quadrant"])
+    market_narrative_view = st.segmented_control(
+        "Market narrative view",
+        ["Trading Activity Timeline", "Rich / Cheap Quadrant"],
+        default="Trading Activity Timeline",
+        key="market_narrative_view",
+    )
 
-    with mn_tab1:
+    if market_narrative_view == "Trading Activity Timeline":
         if issuer_trades.empty:
             st.warning("No trade rows found for the selected issuer and filters.")
         else:
@@ -6471,7 +6476,7 @@ This section combines recent trading behavior with relative-value positioning.
                     else:
                         st.info("No unusually large activity/volume/yield-move events were detected in the selected timeline window.")
 
-    with mn_tab2:
+    elif market_narrative_view == "Rich / Cheap Quadrant":
         if "liq" not in locals() or liq.empty:
             st.info("The quadrant map will be available after liquidity metrics are calculated for the selected issuer.")
         else:

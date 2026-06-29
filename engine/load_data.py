@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import re
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -409,6 +411,76 @@ def build_security_reference_from_trades(market_df: pd.DataFrame, optional_bonds
 
 MMD_FALLBACK_LOOKBACK_YEARS = 2
 MMD_MAX_TENOR_YEAR = 40
+ANALYTICS_CACHE_DIR = Path(tempfile.gettempdir()) / "secondary_market_desk_analytics_cache"
+ANALYTICS_CATEGORY_COLUMNS = {
+    "issuer",
+    "sector",
+    "primary_type",
+    "cusip",
+    "maturity_bucket",
+    "trade_type",
+    "ratings_m_s_f",
+    "rating",
+    "index",
+    "active_benchmark_source",
+    "active_benchmark_tenor",
+    "active_benchmark_rating",
+    "spread_bps_source",
+}
+
+
+def optimize_market_frame_for_analysis(df: pd.DataFrame) -> pd.DataFrame:
+    """Reduce memory pressure after upload so reruns/groupbys stay responsive."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    for col in out.columns:
+        if col in {"trade_date", "trade_datetime", "maturity", "maturity_trade", "maturity_bond", "call_date"}:
+            out[col] = pd.to_datetime(out[col], errors="coerce")
+        elif col in {
+            "yield",
+            "price",
+            "trade_amount",
+            "spread",
+            "spread_bps",
+            "source_spread_bps",
+            "benchmark_spread_bps",
+            "index_rate",
+            "coupon",
+            "coupon_trade",
+            "coupon_bond",
+            "outstanding_amount",
+            "call_price",
+        }:
+            out[col] = pd.to_numeric(out[col], errors="coerce", downcast="float")
+        elif col in {"maturity_year"}:
+            out[col] = pd.to_numeric(out[col], errors="coerce", downcast="integer")
+        elif col in ANALYTICS_CATEGORY_COLUMNS:
+            out[col] = out[col].astype("string").fillna("Unknown").astype("category")
+    return out
+
+
+def _payload_digest(payloads: list[tuple[str, bytes]] | tuple[tuple[str, bytes], ...]) -> str:
+    digest = hashlib.sha256()
+    for name, payload in payloads:
+        digest.update(str(name).encode("utf-8", errors="ignore"))
+        digest.update(str(len(payload or b"")).encode("ascii"))
+        digest.update(payload or b"")
+    return digest.hexdigest()[:24]
+
+
+def materialize_market_parquet(market_df: pd.DataFrame, digest: str) -> str:
+    """Persist the processed market tape as a temp parquet analytics layer."""
+    if market_df is None or market_df.empty or not digest:
+        return ""
+    try:
+        ANALYTICS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = ANALYTICS_CACHE_DIR / f"market_{digest}.parquet"
+        if not path.exists():
+            market_df.to_parquet(path, index=False)
+        return str(path)
+    except Exception:
+        return ""
 
 
 def is_date_like_col(col: object) -> bool:
@@ -589,5 +661,13 @@ def process_uploads(
         mmd_df.attrs["benchmark_conflict_policy"] = "No uploaded MMD or usable trade-sheet Index / Index Rate benchmark was found."
 
     market_df = attach_active_benchmark_spreads(market_df, mmd_df, mmd_df.attrs.get("benchmark_source_mode", "None"))
+    market_df = optimize_market_frame_for_analysis(market_df)
+    analytics_payloads = list(trade_payloads)
+    for optional_payload in [issuer_mapping_payload, mmd_payload, bond_payload]:
+        if optional_payload is not None:
+            analytics_payloads.append(optional_payload)
+    analytics_digest = _payload_digest(tuple(analytics_payloads))
+    market_df.attrs["analytics_store_path"] = materialize_market_parquet(market_df, analytics_digest)
+    market_df.attrs["analytics_store_format"] = "parquet"
 
     return bonds_df, trades_df, issuer_master, market_df, mmd_df, failed_files, duplicates_removed

@@ -68,7 +68,7 @@ def build_workflow_cusip_summary(df: pd.DataFrame) -> pd.DataFrame:
     if "maturity_bucket" in base.columns:
         agg_spec["maturity_bucket"] = ("maturity_bucket", "first")
 
-    summary = base.groupby("cusip", dropna=False).agg(**agg_spec).reset_index()
+    summary = base.groupby("cusip", dropna=False, observed=True).agg(**agg_spec).reset_index()
     if "latest_trade" in summary.columns:
         latest_dates = pd.to_datetime(summary["latest_trade"], errors="coerce")
         latest_anchor = pd.to_datetime(base.get("trade_date"), errors="coerce").max() if "trade_date" in base.columns else pd.Timestamp.today()
@@ -116,7 +116,7 @@ def focused_summary_with_peer_gaps(summary: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     out = summary.copy()
     if "maturity_bucket" in out.columns and "current_spread_bps" in out.columns:
-        out["peer_median_spread_bps"] = out.groupby("maturity_bucket")["current_spread_bps"].transform("median")
+        out["peer_median_spread_bps"] = out.groupby("maturity_bucket", observed=True)["current_spread_bps"].transform("median")
         out["peer_median_gap_bps"] = (
             pd.to_numeric(out["current_spread_bps"], errors="coerce")
             - pd.to_numeric(out["peer_median_spread_bps"], errors="coerce")

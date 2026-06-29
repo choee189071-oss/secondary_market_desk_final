@@ -287,6 +287,7 @@ def _coupon_sort_key(value: object) -> tuple[int, float | str]:
         return (1, str(value))
 
 
+@st.cache_data(show_spinner=False, max_entries=128)
 def _unique_filter_options(df: pd.DataFrame, column: str, *, numeric_sort: bool = False) -> list[str]:
     if df.empty or column not in df.columns:
         return []
@@ -300,19 +301,20 @@ def _unique_filter_options(df: pd.DataFrame, column: str, *, numeric_sort: bool 
     return sorted(values)
 
 
+@st.cache_data(show_spinner=False, max_entries=128)
 def _has_filter_values(df: pd.DataFrame, column: str) -> bool:
     if df.empty or column not in df.columns:
         return False
     return df[column].notna().any()
 
 
-def _search_filter_options(
+@st.cache_data(show_spinner=False, max_entries=128)
+def _search_filter_options_cached(
     df: pd.DataFrame,
     column: str,
     query: str = "",
-    *,
     limit: int = MAX_DYNAMIC_FILTER_OPTIONS,
-    sort_key=None,
+    numeric_sort: bool = False,
 ) -> tuple[list[str], bool]:
     if df.empty or column not in df.columns:
         return [], False
@@ -328,12 +330,30 @@ def _search_filter_options(
         series = series[series.str.upper().str.contains(re.escape(query_upper), na=False)]
 
     values = series.drop_duplicates().tolist()
-    values = sorted(values, key=sort_key) if sort_key else sorted(values)
+    values = sorted(values, key=_coupon_sort_key) if numeric_sort else sorted(values)
     limited = len(values) > limit
     return values[:limit], limited
 
 
-def _filter_existing_values(df: pd.DataFrame, column: str, values: list[object] | tuple[object, ...]) -> list[str]:
+def _search_filter_options(
+    df: pd.DataFrame,
+    column: str,
+    query: str = "",
+    *,
+    limit: int = MAX_DYNAMIC_FILTER_OPTIONS,
+    sort_key=None,
+) -> tuple[list[str], bool]:
+    return _search_filter_options_cached(
+        df,
+        column,
+        query,
+        limit,
+        numeric_sort=sort_key is _coupon_sort_key,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=128)
+def _filter_existing_values(df: pd.DataFrame, column: str, values: tuple[object, ...]) -> list[str]:
     if df.empty or column not in df.columns or not values:
         return []
 
@@ -419,39 +439,73 @@ def _date_range_for_option(df: pd.DataFrame, option: str) -> tuple[pd.Timestamp,
     return max(start, dates.min().normalize()), end
 
 
-def _apply_workbench_filters(df: pd.DataFrame, selection: WorkbenchSelection, issuer: str | None = None) -> pd.DataFrame:
-    out = df.copy()
-    if selection.sector != "All" and "sector" in out.columns:
-        out = out[out["sector"].astype(str) == str(selection.sector)]
+@st.cache_data(show_spinner=False, max_entries=96)
+def _apply_workbench_filters_cached(
+    df: pd.DataFrame,
+    sector: str,
+    issuer: str,
+    start: pd.Timestamp | None,
+    end: pd.Timestamp | None,
+    maturity_years: tuple[int, ...],
+    maturity_bucket: str,
+    coupon_values: tuple[str, ...],
+    cusips: tuple[str, ...],
+    trade_size_bucket: str,
+    trade_type_bucket: str,
+    lot_bucket: str,
+) -> pd.DataFrame:
+    out = df
+    if sector != "All" and "sector" in out.columns:
+        out = out[out["sector"].astype(str) == str(sector)]
     if issuer:
         out = out[out["issuer"].astype(str) == str(issuer)]
-    if selection.date_range is not None and "trade_date" in out.columns:
-        start, end = selection.date_range
+    if start is not None and end is not None and "trade_date" in out.columns:
         dates = pd.to_datetime(out["trade_date"], errors="coerce")
         out = out[(dates >= start) & (dates <= end)]
-    if selection.maturity_years and "workbench_maturity_year" in out.columns:
+    if maturity_years and "workbench_maturity_year" in out.columns:
         years = pd.to_numeric(out["workbench_maturity_year"], errors="coerce")
-        out = out[years.isin(list(selection.maturity_years))]
-    elif selection.maturity_bucket != "All":
-        out = out[out["workbench_maturity_bucket"] == selection.maturity_bucket]
-    if selection.coupon_values and "workbench_coupon" in out.columns:
-        out = out[out["workbench_coupon"].astype(str).isin([str(x) for x in selection.coupon_values])]
-    if selection.cusips and "cusip" in out.columns:
-        out = out[out["cusip"].astype(str).isin([str(x) for x in selection.cusips])]
-    if selection.trade_size_bucket != "All":
-        out = out[out["trade_size_bucket"] == selection.trade_size_bucket]
-    if selection.trade_type_bucket != "All":
-        out = out[out["trade_type_bucket"] == selection.trade_type_bucket]
-    if selection.lot_bucket != "All":
-        out = out[out["lot_bucket"] == selection.lot_bucket]
-    return out
+        out = out[years.isin(list(maturity_years))]
+    elif maturity_bucket != "All":
+        out = out[out["workbench_maturity_bucket"] == maturity_bucket]
+    if coupon_values and "workbench_coupon" in out.columns:
+        out = out[out["workbench_coupon"].astype(str).isin([str(x) for x in coupon_values])]
+    if cusips and "cusip" in out.columns:
+        out = out[out["cusip"].astype(str).isin([str(x) for x in cusips])]
+    if trade_size_bucket != "All":
+        out = out[out["trade_size_bucket"] == trade_size_bucket]
+    if trade_type_bucket != "All":
+        out = out[out["trade_type_bucket"] == trade_type_bucket]
+    if lot_bucket != "All":
+        out = out[out["lot_bucket"] == lot_bucket]
+    return out.copy()
 
 
+def _apply_workbench_filters(df: pd.DataFrame, selection: WorkbenchSelection, issuer: str | None = None) -> pd.DataFrame:
+    start = end = None
+    if selection.date_range is not None:
+        start, end = selection.date_range
+    return _apply_workbench_filters_cached(
+        df,
+        selection.sector,
+        str(issuer or ""),
+        start,
+        end,
+        tuple(selection.maturity_years or ()),
+        selection.maturity_bucket,
+        tuple(str(x) for x in (selection.coupon_values or ())),
+        tuple(str(x) for x in (selection.cusips or ())),
+        selection.trade_size_bucket,
+        selection.trade_type_bucket,
+        selection.lot_bucket,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=128)
 def _aggregation_by(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
     if df.empty or group_col not in df.columns:
         return pd.DataFrame(columns=[group_col, "trade_count", "par_traded", "avg_trade_size"])
     grouped = (
-        df.groupby(group_col, dropna=False)
+        df.groupby(group_col, dropna=False, observed=True)
         .agg(
             trade_count=("cusip", "count") if "cusip" in df.columns else ("trade_amount", "count"),
             par_traded=("trade_amount", "sum"),
@@ -462,6 +516,54 @@ def _aggregation_by(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
         .reset_index()
     )
     return grouped.sort_values("par_traded", ascending=False)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _activity_concentration_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    return (
+        df.groupby(["workbench_maturity_label", "trade_size_bucket"], dropna=False, observed=True)
+        .agg(
+            trade_count=("cusip", "count") if "cusip" in df.columns else ("trade_amount", "count"),
+            par_amount=("trade_amount", "sum"),
+            average_yield=("yield", "mean"),
+            average_spread_bps=("spread_bps", "mean"),
+        )
+        .reset_index()
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _participation_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    return (
+        df.groupby("participant_group", dropna=False, observed=True)
+        .agg(par_traded=("trade_amount", "sum"), trade_count=("cusip", "count"))
+        .reset_index()
+        .sort_values("par_traded", ascending=False)
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _liquidity_band_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    max_date = pd.to_datetime(df["trade_date"], errors="coerce").max()
+    grouped = (
+        df.groupby(["workbench_maturity_label", "trade_size_bucket"], dropna=False, observed=True)
+        .agg(
+            average_spread=("spread_bps", "mean"),
+            average_yield=("yield", "mean"),
+            trade_frequency=("cusip", "count"),
+            last_trade_date=("trade_date", "max"),
+            par_traded=("trade_amount", "sum"),
+        )
+        .reset_index()
+    )
+    grouped["days_since_last_trade"] = (max_date - pd.to_datetime(grouped["last_trade_date"], errors="coerce")).dt.days
+    return grouped
 
 
 def _top_bucket(df: pd.DataFrame, group_col: str, metric: str = "trade_count") -> str:
@@ -476,6 +578,7 @@ def _top_bucket(df: pd.DataFrame, group_col: str, metric: str = "trade_count") -
     return str(row[group_col].iloc[0])
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
 def _security_detail_table(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "cusip" not in df.columns:
         return pd.DataFrame()
@@ -496,18 +599,19 @@ def _security_detail_table(df: pd.DataFrame) -> pd.DataFrame:
     elif "maturity_bond" in df.columns:
         agg["maturity_date"] = ("maturity_bond", "first")
 
-    detail = df.groupby("cusip", dropna=False).agg(**agg).reset_index()
+    detail = df.groupby("cusip", dropna=False, observed=True).agg(**agg).reset_index()
     for col in ["average_yield", "average_spread_bps"]:
         if col in detail.columns:
             detail[col] = pd.to_numeric(detail[col], errors="coerce").round(3 if col == "average_yield" else 1)
     return detail.sort_values(["par_traded", "trade_count"], ascending=False)
 
 
-def _peer_metrics(df: pd.DataFrame, issuers: list[str]) -> pd.DataFrame:
+@st.cache_data(show_spinner=False, max_entries=64)
+def _peer_metrics(df: pd.DataFrame, issuers: tuple[str, ...]) -> pd.DataFrame:
     if df.empty or not issuers:
         return pd.DataFrame()
     rows = []
-    for issuer, group in df[df["issuer"].astype(str).isin([str(x) for x in issuers])].groupby("issuer"):
+    for issuer, group in df[df["issuer"].astype(str).isin([str(x) for x in issuers])].groupby("issuer", observed=True):
         trade_count = len(group)
         par_traded = float(pd.to_numeric(group["trade_amount"], errors="coerce").sum())
         avg_yield = pd.to_numeric(group["yield"], errors="coerce").mean()
@@ -570,6 +674,7 @@ def _fmt_rate(value: object) -> str:
         return "N/A"
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
 def _build_cusip_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
@@ -1163,18 +1268,23 @@ def _render_volume_overview(filtered_df: pd.DataFrame):
         "Trade Count": "trade_count",
         "Average Trade Size": "avg_trade_size",
     }[metric_label]
-    tabs = st.tabs(["Maturity", "Trade Size", "Trade Type"])
-    group_specs = [
-        ("workbench_maturity_label", "Maturity Year"),
-        ("trade_size_bucket", "Trade Size Bucket"),
-        ("trade_type_bucket", "Trade Type"),
-    ]
-    for tab, (group_col, label) in zip(tabs, group_specs):
-        with tab:
-            chart_df = _aggregation_by(filtered_df, group_col)
-            fig = px.bar(chart_df, x=group_col, y=metric_col, text_auto=".2s", title=f"{metric_label} by {label}")
-            fig.update_layout(height=360, xaxis_title=label, yaxis_title=metric_label)
-            safe_plotly_chart(fig)
+    view = st.segmented_control(
+        "Volume view",
+        ["Maturity", "Trade Size", "Trade Type"],
+        default="Maturity",
+        key="workbench_volume_view",
+        label_visibility="collapsed",
+    )
+    group_specs = {
+        "Maturity": ("workbench_maturity_label", "Maturity Year"),
+        "Trade Size": ("trade_size_bucket", "Trade Size Bucket"),
+        "Trade Type": ("trade_type_bucket", "Trade Type"),
+    }
+    group_col, label = group_specs.get(view or "Maturity", group_specs["Maturity"])
+    chart_df = _aggregation_by(filtered_df, group_col)
+    fig = px.bar(chart_df, x=group_col, y=metric_col, text_auto=".2s", title=f"{metric_label} by {label}")
+    fig.update_layout(height=360, xaxis_title=label, yaxis_title=metric_label)
+    safe_plotly_chart(fig)
 
 
 def _render_activity_concentration_map(filtered_df: pd.DataFrame):
@@ -1193,16 +1303,7 @@ def _render_activity_concentration_map(filtered_df: pd.DataFrame):
             horizontal=True,
             label_visibility="collapsed",
         )
-        grouped = (
-            filtered_df.groupby(["workbench_maturity_label", "trade_size_bucket"], dropna=False)
-            .agg(
-                trade_count=("cusip", "count") if "cusip" in filtered_df.columns else ("trade_amount", "count"),
-                par_amount=("trade_amount", "sum"),
-                average_yield=("yield", "mean"),
-                average_spread_bps=("spread_bps", "mean"),
-            )
-            .reset_index()
-        )
+        grouped = _activity_concentration_table(filtered_df)
         if grouped.empty:
             st.info("No maturity / trade-size concentration can be calculated.")
             return
@@ -1272,12 +1373,7 @@ def _render_participation(filtered_df: pd.DataFrame):
         if filtered_df.empty:
             st.info("No trades match the selected filters.")
             return
-        part = (
-            filtered_df.groupby("participant_group", dropna=False)
-            .agg(par_traded=("trade_amount", "sum"), trade_count=("cusip", "count"))
-            .reset_index()
-            .sort_values("par_traded", ascending=False)
-        )
+        part = _participation_table(filtered_df)
         total_par = part["par_traded"].sum()
         part["par_share"] = np.where(total_par > 0, part["par_traded"] / total_par * 100, 0)
         top_participant = part.iloc[0] if not part.empty else None
@@ -1323,19 +1419,7 @@ def _render_liquidity_dashboard(filtered_df: pd.DataFrame):
     if filtered_df.empty:
         st.info("No trades match the selected filters.")
         return
-    max_date = pd.to_datetime(filtered_df["trade_date"], errors="coerce").max()
-    grouped = (
-        filtered_df.groupby(["workbench_maturity_label", "trade_size_bucket"], dropna=False)
-        .agg(
-            average_spread=("spread_bps", "mean"),
-            average_yield=("yield", "mean"),
-            trade_frequency=("cusip", "count"),
-            last_trade_date=("trade_date", "max"),
-            par_traded=("trade_amount", "sum"),
-        )
-        .reset_index()
-    )
-    grouped["days_since_last_trade"] = (max_date - pd.to_datetime(grouped["last_trade_date"], errors="coerce")).dt.days
+    grouped = _liquidity_band_table(filtered_df)
     metric = st.selectbox(
         "Liquidity metric",
         ["Trade Frequency", "Par Traded", "Average Spread", "Average Yield", "Days Since Last Trade"],
@@ -1463,7 +1547,7 @@ def _render_peer_comparison(prepared_df: pd.DataFrame, selection: WorkbenchSelec
     default_peers = peers_available[:2]
     peer_issuers = st.multiselect("Peer issuers", peers_available, default=default_peers)
     issuers = [selection.issuer] + peer_issuers
-    metrics = _peer_metrics(same_filter_universe, issuers)
+    metrics = _peer_metrics(same_filter_universe, tuple(str(x) for x in issuers))
     if metrics.empty:
         st.info("No peer trades match the same filters.")
         return pd.DataFrame(), peer_issuers
@@ -1491,7 +1575,7 @@ def _build_narrative(filtered_df: pd.DataFrame, security_detail: pd.DataFrame, s
         f"The most active trade type was {top_type}.",
     ]
 
-    part = filtered_df.groupby("participant_group").agg(par_traded=("trade_amount", "sum")).reset_index()
+    part = filtered_df.groupby("participant_group", observed=True).agg(par_traded=("trade_amount", "sum")).reset_index()
     if not part.empty and total_par > 0:
         top_part = part.sort_values("par_traded", ascending=False).iloc[0]
         observations.append(f"{top_part['participant_group']} activity represented {_fmt_pct(top_part['par_traded'] / total_par * 100)} of traded par.")
@@ -1683,7 +1767,7 @@ def render_trading_workbench(
             current_coupons = _filter_existing_values(
                 issuer_base,
                 "workbench_coupon",
-                st.session_state.get("workbench_coupon_values", []),
+                tuple(st.session_state.get("workbench_coupon_values", [])),
             )
             coupon_options = list(dict.fromkeys(current_coupons + coupon_options))
             if st.session_state.get("workbench_coupon_values") != current_coupons:
@@ -1714,7 +1798,7 @@ def render_trading_workbench(
             current_cusips = _filter_existing_values(
                 issuer_base,
                 "cusip",
-                st.session_state.get("workbench_cusips", []),
+                tuple(st.session_state.get("workbench_cusips", [])),
             )
             if len(str(cusip_search or "").strip()) >= 2:
                 cusip_matches, cusip_limited = _search_filter_options(issuer_base, "cusip", cusip_search)
