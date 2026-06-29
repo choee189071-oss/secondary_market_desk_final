@@ -747,6 +747,26 @@ def _render_inspector_css():
   padding: 3px 8px;
   margin: 2px 4px 2px 0;
 }
+.workbench-analysis-block {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px 16px 10px 16px;
+  background: #ffffff;
+  margin-bottom: 14px;
+}
+.workbench-block-title {
+  color: #1f2937;
+  font-size: 1.22rem;
+  font-weight: 820;
+  line-height: 1.2;
+  margin: 0 0 4px 0;
+}
+.workbench-block-caption {
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin-bottom: 10px;
+}
 </style>
 """,
         unsafe_allow_html=True,
@@ -1143,110 +1163,143 @@ def _render_volume_overview(filtered_df: pd.DataFrame):
 
 
 def _render_activity_concentration_map(filtered_df: pd.DataFrame):
-    st.subheader("Activity Concentration")
-    if filtered_df.empty:
-        st.info("No trades match the selected filters.")
-        return
-    metric_label = st.radio(
-        "Rank by",
-        ["Par Amount", "Trade Count"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    grouped = (
-        filtered_df.groupby(["workbench_maturity_label", "trade_size_bucket"], dropna=False)
-        .agg(
-            trade_count=("cusip", "count") if "cusip" in filtered_df.columns else ("trade_amount", "count"),
-            par_amount=("trade_amount", "sum"),
-            average_yield=("yield", "mean"),
-            average_spread_bps=("spread_bps", "mean"),
+    with st.container(border=True):
+        st.markdown("<div class='workbench-block-title'>Activity Concentration</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='workbench-block-caption'>Ranks the maturity and trade-size bands driving the selected issuer scope.</div>",
+            unsafe_allow_html=True,
         )
-        .reset_index()
-    )
-    if grouped.empty:
-        st.info("No maturity / trade-size concentration can be calculated.")
-        return
-    grouped = grouped[grouped["workbench_maturity_label"].isin(MATURITY_YEAR_OPTIONS)]
-    grouped = grouped[grouped["trade_size_bucket"].isin([x for x in TRADE_SIZE_BUCKETS if x != "All"])]
-    if grouped.empty:
-        st.info("No known maturity / trade-size buckets match the selected filters.")
-        return
-    metric_col = "par_amount" if metric_label == "Par Amount" else "trade_count"
-    grouped["band_label"] = grouped["workbench_maturity_label"].astype(str) + " / " + grouped["trade_size_bucket"].astype(str)
-    grouped["display_value"] = np.where(
-        metric_col == "par_amount",
-        "$" + (grouped[metric_col] / 1_000_000).round(1).astype(str) + "MM",
-        grouped[metric_col].round(0).astype(int).astype(str),
-    )
-    chart_df = grouped.sort_values(metric_col, ascending=False).head(14).sort_values(metric_col, ascending=True)
-    fig = px.bar(
-        chart_df,
-        x=metric_col,
-        y="band_label",
-        orientation="h",
-        color="workbench_maturity_label",
-        text="display_value",
-        hover_data={
-            "workbench_maturity_label": True,
-            "trade_size_bucket": True,
-            "par_amount": ":,.0f",
-            "trade_count": ":,",
-            "average_yield": ":.3f",
-            "average_spread_bps": ":.1f",
-            "display_value": False,
-        },
-        labels={
-            metric_col: metric_label,
-            "band_label": "Maturity / Trade Size",
-            "workbench_maturity_label": "Maturity Year",
-            "trade_size_bucket": "Trade Size Bucket",
-            "par_amount": "Par Amount",
-            "trade_count": "Trade Count",
-            "average_yield": "Average Yield",
-            "average_spread_bps": "Average Spread",
-        },
-        title=f"Top Activity Bands by {metric_label}",
-    )
-    fig.update_traces(textposition="outside", cliponaxis=False)
-    fig.update_layout(
-        height=430,
-        yaxis=dict(categoryorder="array", categoryarray=chart_df["band_label"].tolist()),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=20, r=70, t=70, b=30),
-    )
-    safe_plotly_chart(fig)
+        if filtered_df.empty:
+            st.info("No trades match the selected filters.")
+            return
+        metric_label = st.radio(
+            "Rank by",
+            ["Par Amount", "Trade Count"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        grouped = (
+            filtered_df.groupby(["workbench_maturity_label", "trade_size_bucket"], dropna=False)
+            .agg(
+                trade_count=("cusip", "count") if "cusip" in filtered_df.columns else ("trade_amount", "count"),
+                par_amount=("trade_amount", "sum"),
+                average_yield=("yield", "mean"),
+                average_spread_bps=("spread_bps", "mean"),
+            )
+            .reset_index()
+        )
+        if grouped.empty:
+            st.info("No maturity / trade-size concentration can be calculated.")
+            return
+        grouped = grouped[grouped["workbench_maturity_label"].isin(MATURITY_YEAR_OPTIONS)]
+        grouped = grouped[grouped["trade_size_bucket"].isin([x for x in TRADE_SIZE_BUCKETS if x != "All"])]
+        if grouped.empty:
+            st.info("No known maturity / trade-size buckets match the selected filters.")
+            return
+        metric_col = "par_amount" if metric_label == "Par Amount" else "trade_count"
+        plot_col = "plot_value"
+        grouped["band_label"] = grouped["workbench_maturity_label"].astype(str) + " / " + grouped["trade_size_bucket"].astype(str)
+        grouped[plot_col] = grouped[metric_col] / 1_000_000 if metric_col == "par_amount" else grouped[metric_col]
+        grouped["display_value"] = np.where(
+            metric_col == "par_amount",
+            "$" + (grouped["par_amount"] / 1_000_000).round(1).astype(str) + "MM",
+            grouped["trade_count"].round(0).astype(int).astype(str),
+        )
+        chart_df = grouped.sort_values(metric_col, ascending=False).head(10).sort_values(metric_col, ascending=True)
+        fig = px.bar(
+            chart_df,
+            x=plot_col,
+            y="band_label",
+            orientation="h",
+            color="workbench_maturity_label",
+            text="display_value",
+            hover_data={
+                "workbench_maturity_label": True,
+                "trade_size_bucket": True,
+                "par_amount": ":,.0f",
+                "trade_count": ":,",
+                "average_yield": ":.3f",
+                "average_spread_bps": ":.1f",
+                "display_value": False,
+                plot_col: False,
+            },
+            labels={
+                plot_col: "Par Amount ($MM)" if metric_col == "par_amount" else "Trade Count",
+                "band_label": "",
+                "workbench_maturity_label": "Maturity",
+                "trade_size_bucket": "Trade Size Bucket",
+                "par_amount": "Par Amount",
+                "trade_count": "Trade Count",
+                "average_yield": "Average Yield",
+                "average_spread_bps": "Average Spread",
+            },
+        )
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        fig.update_layout(
+            height=430,
+            xaxis_title="Par Amount ($MM)" if metric_col == "par_amount" else "Trade Count",
+            yaxis_title="",
+            yaxis=dict(categoryorder="array", categoryarray=chart_df["band_label"].tolist(), automargin=True),
+            legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="left", x=0, title_text="Maturity"),
+            legend_font=dict(size=11),
+            margin=dict(l=8, r=82, t=16, b=88),
+        )
+        safe_plotly_chart(fig, width="stretch")
 
 
 def _render_participation(filtered_df: pd.DataFrame):
-    st.subheader("Dealer vs Customer Participation")
-    if filtered_df.empty:
-        st.info("No trades match the selected filters.")
-        return
-    part = (
-        filtered_df.groupby("participant_group", dropna=False)
-        .agg(par_traded=("trade_amount", "sum"), trade_count=("cusip", "count"))
-        .reset_index()
-        .sort_values("par_traded", ascending=False)
-    )
-    total_par = part["par_traded"].sum()
-    part["par_share"] = np.where(total_par > 0, part["par_traded"] / total_par * 100, 0)
-    c1, c2 = st.columns([0.48, 0.52])
-    with c1:
-        fig = px.pie(part, values="par_traded", names="participant_group", hole=0.45, title="Par Share")
-        fig.update_layout(height=360)
-        safe_plotly_chart(fig)
-    with c2:
+    with st.container(border=True):
+        st.markdown("<div class='workbench-block-title'>Dealer vs Customer</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='workbench-block-caption'>Shows who is driving traded par inside the active filter scope.</div>",
+            unsafe_allow_html=True,
+        )
+        if filtered_df.empty:
+            st.info("No trades match the selected filters.")
+            return
+        part = (
+            filtered_df.groupby("participant_group", dropna=False)
+            .agg(par_traded=("trade_amount", "sum"), trade_count=("cusip", "count"))
+            .reset_index()
+            .sort_values("par_traded", ascending=False)
+        )
+        total_par = part["par_traded"].sum()
+        part["par_share"] = np.where(total_par > 0, part["par_traded"] / total_par * 100, 0)
+        top_participant = part.iloc[0] if not part.empty else None
+        if top_participant is not None:
+            m1, m2 = st.columns(2)
+            with m1:
+                clean_metric_card("Top Participant", str(top_participant["participant_group"]), size="small")
+            with m2:
+                clean_metric_card("Share of Par", _fmt_pct(float(top_participant["par_share"])), size="small")
+
+        fig = px.pie(
+            part,
+            values="par_traded",
+            names="participant_group",
+            hole=0.58,
+            color_discrete_sequence=px.colors.qualitative.Set2,
+        )
+        fig.update_traces(textinfo="percent", textposition="inside", hovertemplate="%{label}<br>%{percent}<br>%{value:,.0f}<extra></extra>")
+        fig.update_layout(
+            height=285,
+            showlegend=False,
+            margin=dict(l=8, r=8, t=8, b=8),
+        )
+        safe_plotly_chart(fig, width="stretch")
+
+        table = part.assign(
+            **{
+                "Par Traded": part["par_traded"].map(_fmt_mm),
+                "Par Share": part["par_share"].map(_fmt_pct),
+            }
+        )
+        table = table.rename(columns={"participant_group": "Participant", "trade_count": "Trades"})
         safe_dataframe(
-            part.rename(
-                columns={
-                    "participant_group": "Participant",
-                    "par_traded": "Par Traded",
-                    "trade_count": "Trade Count",
-                    "par_share": "Par %",
-                }
-            ),
+            table[["Participant", "Par Traded", "Trades", "Par Share"]],
             hide_index=True,
             auto_collapse=False,
+            width="stretch",
         )
 
 
@@ -1722,7 +1775,7 @@ def render_trading_workbench(
         section_anchor("workbench-market-analytics", "3. Market Analytics")
         st.caption(f"Benchmark source retained for spread calculations: {benchmark_source_mode}. Trading analysis is driven by the uploaded trade tape.")
         _render_volume_overview(filtered_issuer)
-        a1, a2 = st.columns([0.52, 0.48])
+        a1, a2 = st.columns([0.62, 0.38], gap="large")
         with a1:
             _render_activity_concentration_map(filtered_issuer)
         with a2:
