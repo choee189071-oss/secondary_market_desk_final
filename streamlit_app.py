@@ -385,7 +385,7 @@ from data_utils import read_uploaded_file
 
 st.set_page_config(page_title="Municipal Secondary Market Dashboard Generator", layout="wide")
 st.title("Municipal Secondary Market Dashboard Generator")
-st.caption("Bring your own MuniPro trade-history exports. Generate issuer-level relative value and liquidity analytics; bond reference data is optional enrichment.")
+st.caption("Bring your own MuniPro trade-history exports. Generate issuer-level relative value and liquidity analytics from the uploaded trade tape.")
 
 st.markdown(
     """
@@ -2212,41 +2212,31 @@ with st.expander(
     expanded=True,
 ):
     st.markdown(
-        "<div class='focus-band'><b>Input:</b> trade files required; reference files optional.</div>",
+        "<div class='focus-band'><b>Input:</b> upload one or more trade-history files to open the workbench.</div>",
         unsafe_allow_html=True,
     )
-    upload_col1, upload_col2 = st.columns([1.15, 0.85])
-    with upload_col1:
-        trade_files = st.file_uploader(
-            "Trade History File(s) — required",
-            type=["csv", "xlsx", "xls"],
-            accept_multiple_files=True,
-            help="Required. Name each trade file after its issuer, e.g. State_of_California_Trade.csv or LADWP_Trade.xlsx.",
-        )
-        st.caption("Name each trade file after its issuer. The app uses the filename as the issuer name.")
-        st.caption("Keep proprietary raw exports out of public GitHub. Upload them only during your own session.")
-
-    with upload_col2:
-        bond_file = st.file_uploader("Bond Reference File — optional enrichment", type=["csv", "xlsx", "xls"])
-        issuer_mapping_file = st.file_uploader("Issuer / Sector Mapping — optional", type=["csv", "xlsx", "xls"])
-        mmd_file = st.file_uploader("MMD / AAA Benchmark Curve — optional primary benchmark", type=["csv", "xlsx", "xls"])
-        use_external_mmd_fallback = False
-        st.caption("If provided, uploaded MMD is the active AAA benchmark. Trade-sheet Index Rate is fallback only.")
+    trade_files = st.file_uploader(
+        "Trade History File(s) — required",
+        type=["csv", "xlsx", "xls"],
+        accept_multiple_files=True,
+        help="Required. Name each trade file after its issuer, e.g. State_of_California_Trade.csv or LADWP_Trade.xlsx.",
+    )
+    st.caption("Name each trade file after its issuer. The app uses the filename as the issuer name.")
+    st.caption("Keep proprietary raw exports out of public GitHub. Upload them only during your own session.")
 
     demo_mode_active, demo_status = _render_golden_sample_controls(len(trade_files or []))
 
     with st.expander("Download blank templates", expanded=False):
         template_download_button(TRADE_REQUIRED + TRADE_RECOMMENDED + TRADE_OPTIONAL, "Trade template CSV", "trade_history_template.csv")
-        template_download_button(BOND_REQUIRED + BOND_RECOMMENDED + BOND_OPTIONAL, "Optional bond reference template CSV", "bond_reference_template.csv")
 
 demo_trade_payloads, demo_mmd_payload, _demo_status = _golden_sample_payloads() if demo_mode_active else ([], None, {})
 
 if not trade_files and not demo_trade_payloads:
-    st.info("Upload at least one MuniPro trade-history file, or load the LADWP golden sample, to open the Trading Workbench. Bond reference data is optional enrichment.")
+    st.info("Upload at least one MuniPro trade-history file, or load the LADWP golden sample, to open the Trading Workbench.")
     with st.expander("Expected file logic"):
         st.write(
             "The app now uses a trade-first workflow: it standardizes CUSIP fields, uses each trade file name as the issuer name, "
-            "builds maturity-year fields from trade maturity dates, and optionally enriches static fields from a bond reference file when provided."
+            "and builds maturity-year fields from trade maturity dates."
         )
     st.stop()
 
@@ -2257,10 +2247,10 @@ if demo_mode_active and not trade_files:
     mmd_payload = demo_mmd_payload
     st.success("Demo mode active: loaded the LADWP golden sample into the full analysis workflow.")
 else:
-    bond_payload = (bond_file.name, bond_file.getvalue()) if bond_file else None
+    bond_payload = None
     trade_payloads = [(f.name, f.getvalue()) for f in trade_files]
-    issuer_mapping_payload = (issuer_mapping_file.name, issuer_mapping_file.getvalue()) if issuer_mapping_file else None
-    mmd_payload = (mmd_file.name, mmd_file.getvalue()) if mmd_file else None
+    issuer_mapping_payload = None
+    mmd_payload = None
 show_file_audit = True
 show_methodology_audit = False
 
@@ -2277,8 +2267,6 @@ if bond_payload is not None:
         display_validation_report("Optional Bond Reference File", bond_report, bond_warnings)
 else:
     bond_report = {"can_run": True}
-    if show_file_audit:
-        st.info("No bond reference file uploaded. Running in trade-only mode; static bond metadata will be inferred from the trade tape where possible.")
 
 trade_reports = []
 trade_blocking_failures = []
