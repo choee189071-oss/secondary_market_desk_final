@@ -348,7 +348,9 @@ def render_focused_cusip_drilldown(issuer_trades: pd.DataFrame, selected_issuer:
     selector_options = summary["cusip"].dropna().astype(str).tolist()
     current_cusip = str(st.session_state.get("workbench_selected_cusip") or "").strip()
     default_idx = selector_options.index(current_cusip) if current_cusip in selector_options else 0
-    if st.session_state.get("focused_cusip_detail_select") not in selector_options:
+    if current_cusip in selector_options and st.session_state.get("focused_cusip_detail_select") != current_cusip:
+        st.session_state["focused_cusip_detail_select"] = current_cusip
+    elif st.session_state.get("focused_cusip_detail_select") not in selector_options:
         st.session_state["focused_cusip_detail_select"] = selector_options[default_idx]
     selected_cusip = st.selectbox(
         "Select CUSIP",

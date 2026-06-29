@@ -25,8 +25,6 @@ from ui.common import (
     safe_plotly_chart,
     section_anchor,
 )
-from ui.watchlist_state import WATCHLIST_STAGE_OPTIONS, _focused_watchlist_records, _upsert_focused_watchlist
-
 
 MATURITY_BUCKETS = [
     "All",
@@ -132,8 +130,6 @@ class SecurityProfile:
     liquidity_score: float
     rv_score: float
     peer_median_gap_bps: float
-    watchlist_status: str
-    watchlist_note: str
 
 
 def _coerce_date(series: pd.Series) -> pd.Series:
@@ -580,6 +576,15 @@ def _build_cusip_summary(df: pd.DataFrame) -> pd.DataFrame:
     return focused_summary_with_peer_gaps(build_workflow_cusip_summary(df))
 
 
+def _sync_workbench_selected_cusip(source_key: str):
+    selected = str(st.session_state.get(source_key) or "").strip()
+    if not selected:
+        return
+    st.session_state["workbench_selected_cusip"] = selected
+    for key in ["workbench_sidebar_cusip_select", "workbench_security_path_select", "focused_cusip_detail_select"]:
+        st.session_state[key] = selected
+
+
 def _best_cusip_for_profile(filtered_df: pd.DataFrame, summary: pd.DataFrame) -> str:
     current = str(st.session_state.get("workbench_selected_cusip") or "").strip()
     if current and not filtered_df.empty and "cusip" in filtered_df.columns:
@@ -589,6 +594,41 @@ def _best_cusip_for_profile(filtered_df: pd.DataFrame, summary: pd.DataFrame) ->
     if not summary.empty and "cusip" in summary.columns:
         return str(summary.iloc[0].get("cusip", ""))
     return ""
+
+
+def _sidebar_cusip_options(filtered_df: pd.DataFrame, summary: pd.DataFrame) -> list[str]:
+    if not summary.empty and "cusip" in summary.columns:
+        options = summary["cusip"].dropna().astype(str).tolist()
+    elif not filtered_df.empty and "cusip" in filtered_df.columns:
+        options = sorted(filtered_df["cusip"].dropna().astype(str).unique().tolist())
+    else:
+        options = []
+    return list(dict.fromkeys([value for value in options if value and value.lower() != "nan"]))
+
+
+def _sidebar_cusip_labels(summary: pd.DataFrame) -> dict[str, str]:
+    if summary.empty or "cusip" not in summary.columns:
+        return {}
+    labels: dict[str, str] = {}
+    for _, row in summary.iterrows():
+        cusip = str(row.get("cusip", "")).strip()
+        if not cusip or cusip.lower() == "nan":
+            continue
+        parts = [cusip]
+        maturity = str(row.get("maturity_bucket", "") or "").strip()
+        signal = str(row.get("signal", "") or "").strip()
+        trades = row.get("trade_count", pd.NA)
+        if maturity and maturity.lower() != "nan":
+            parts.append(maturity)
+        if signal and signal.lower() != "nan":
+            parts.append(signal)
+        try:
+            if pd.notna(trades):
+                parts.append(f"{int(float(trades)):,} trades")
+        except Exception:
+            pass
+        labels[cusip] = " / ".join(parts)
+    return labels
 
 
 def _build_issuer_profile(
@@ -647,8 +687,6 @@ def _build_security_profile(
             summary_row = hit.iloc[0]
 
     latest = _latest_security_trade(detail)
-    records = _focused_watchlist_records()
-    watch_record = records.get(str(selected_cusip), {})
 
     return SecurityProfile(
         cusip=str(selected_cusip),
@@ -664,8 +702,6 @@ def _build_security_profile(
         liquidity_score=summary_row.get("liquidity_score", np.nan),
         rv_score=summary_row.get("rv_score", np.nan),
         peer_median_gap_bps=summary_row.get("peer_median_gap_bps", np.nan),
-        watchlist_status=str(watch_record.get("status", "Not saved")),
-        watchlist_note=str(watch_record.get("note", "")),
     )
 
 
@@ -790,24 +826,18 @@ def _inspector_rows(rows: list[tuple[str, str, str]]) -> str:
 def _render_right_inspector(
     selection: WorkbenchSelection,
     issuer_profile: IssuerProfile,
-    security_profile: SecurityProfile | None,
+    filtered_df: pd.DataFrame,
     summary: pd.DataFrame,
-):
-    object_title = security_profile.cusip if security_profile else issuer_profile.issuer
-    object_subtitle = (
-        f"{security_profile.signal} / {security_profile.maturity_bucket}"
-        if security_profile
-        else f"{issuer_profile.sector} / issuer profile"
-    )
-
+) -> tuple[str, SecurityProfile | None]:
     quality_rows = [
         ("Benchmark", issuer_profile.benchmark_source_mode, _quality_status(issuer_profile.benchmark_coverage_pct, good=80, warn=40)),
         ("Benchmark coverage", "N/A" if issuer_profile.benchmark_coverage_pct is None else f"{issuer_profile.benchmark_coverage_pct:.1f}%", _quality_status(issuer_profile.benchmark_coverage_pct, good=80, warn=40)),
         ("CUSIP quality", "N/A" if issuer_profile.cusip_quality_pct is None else f"{issuer_profile.cusip_quality_pct:.1f}%", _quality_status(issuer_profile.cusip_quality_pct, good=95, warn=80)),
         ("Yield quality", "N/A" if issuer_profile.yield_quality_pct is None else f"{issuer_profile.yield_quality_pct:.1f}%", _quality_status(issuer_profile.yield_quality_pct, good=90, warn=70)),
     ]
-    issuer_rows = [
+    overview_rows = [
         ("Issuer", issuer_profile.issuer, "neutral"),
+        ("Sector", issuer_profile.sector or "All", "neutral"),
         ("Rows / CUSIPs", f"{issuer_profile.row_count:,} / {issuer_profile.cusip_count:,}", "neutral"),
         ("Par", _fmt_mm(issuer_profile.total_par), "neutral"),
         ("Median spread", _fmt_bps(issuer_profile.median_spread_bps), "neutral"),
@@ -817,11 +847,59 @@ def _render_right_inspector(
         ("Top type", issuer_profile.top_trade_type, "neutral"),
     ]
 
+    st.markdown(
+        f"""
+<div class="inspector-panel">
+  <div class="inspector-kicker">Inspector</div>
+  <div class="inspector-title">{_html_escape(issuer_profile.issuer)}</div>
+  <div class="inspector-subtitle">Start with the active issuer/filter scope, then narrow into one CUSIP.</div>
+  <span class="inspector-chip">Issuer overview</span>
+  <span class="inspector-chip">Data quality</span>
+  <span class="inspector-chip">CUSIP drilldown</span>
+  <div class="inspector-section">
+    <div class="inspector-section-heading">Scope Overview</div>
+    {_inspector_rows(overview_rows)}
+  </div>
+  <div class="inspector-section">
+    <div class="inspector-section-heading">Data Quality</div>
+    {_inspector_rows(quality_rows)}
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    cusip_options = _sidebar_cusip_options(filtered_df, summary)
+    selected_cusip = _best_cusip_for_profile(filtered_df, summary)
+    if selected_cusip and selected_cusip in cusip_options:
+        st.session_state["workbench_sidebar_cusip_select"] = selected_cusip
+    elif cusip_options:
+        selected_cusip = cusip_options[0]
+        st.session_state["workbench_sidebar_cusip_select"] = selected_cusip
+    else:
+        selected_cusip = ""
+
+    option_labels = _sidebar_cusip_labels(summary)
+    security_profile = None
+    if cusip_options:
+        selected_cusip = st.selectbox(
+            "Inspect CUSIP",
+            cusip_options,
+            key="workbench_sidebar_cusip_select",
+            format_func=lambda value: option_labels.get(str(value), str(value)),
+            help="Choose the CUSIP shown in the sidebar detail panel.",
+            on_change=_sync_workbench_selected_cusip,
+            args=("workbench_sidebar_cusip_select",),
+        )
+        st.session_state["workbench_selected_cusip"] = selected_cusip
+        security_profile = _build_security_profile(filtered_df, summary, selected_cusip, selection.issuer)
+
     security_rows: list[tuple[str, str, str]] = []
     if security_profile:
         security_rows = [
             ("CUSIP", security_profile.cusip, "neutral"),
-            ("Watchlist", security_profile.watchlist_status, "good" if security_profile.watchlist_status != "Not saved" else "neutral"),
+            ("Signal", security_profile.signal, "neutral"),
+            ("Maturity", security_profile.maturity_bucket, "neutral"),
             ("Spread", _fmt_bps(security_profile.current_spread_bps), "neutral"),
             ("Peer gap", _fmt_bps(security_profile.peer_median_gap_bps), "neutral"),
             ("Liquidity", _fmt_num(security_profile.liquidity_score), "neutral"),
@@ -836,76 +914,18 @@ def _render_right_inspector(
     st.markdown(
         f"""
 <div class="inspector-panel">
-  <div class="inspector-kicker">Inspector</div>
-  <div class="inspector-title">{_html_escape(object_title)}</div>
-  <div class="inspector-subtitle">{_html_escape(object_subtitle)}</div>
-  <span class="inspector-chip">Issuer object</span>
-  <span class="inspector-chip">CUSIP object</span>
-  <span class="inspector-chip">Benchmark evidence</span>
+  <div class="inspector-kicker">Selected CUSIP</div>
+  <div class="inspector-title">{_html_escape(selected_cusip or "No CUSIP")}</div>
+  <div class="inspector-subtitle">{_html_escape((security_profile.signal + " / " + security_profile.maturity_bucket) if security_profile else "No CUSIP is available inside the active filter.")}</div>
   <div class="inspector-section">
-    <div class="inspector-section-heading">Data Quality</div>
-    {_inspector_rows(quality_rows)}
-  </div>
-  <div class="inspector-section">
-    <div class="inspector-section-heading">Issuer Profile</div>
-    {_inspector_rows(issuer_rows)}
-  </div>
-  <div class="inspector-section">
-    <div class="inspector-section-heading">Security Profile</div>
-    {_inspector_rows(security_rows) if security_rows else "<div class='inspector-subtitle'>Select a CUSIP in Security Drilldown or command bar.</div>"}
+    <div class="inspector-section-heading">CUSIP Detail</div>
+    {_inspector_rows(security_rows) if security_rows else "<div class='inspector-subtitle'>No CUSIP is available inside the active filter.</div>"}
   </div>
 </div>
 """,
         unsafe_allow_html=True,
     )
-
-    note_key = f"workbench_inspector_note_{selection.issuer}_{security_profile.cusip if security_profile else 'issuer'}"
-    existing_note = security_profile.watchlist_note if security_profile else st.session_state.get(note_key, "")
-    note = st.text_area(
-        "Inspector note",
-        value=existing_note,
-        key=note_key,
-        height=92,
-        placeholder="Analyst note, evidence check, or next question.",
-    )
-    if security_profile:
-        status_options = WATCHLIST_STAGE_OPTIONS
-        current_status = security_profile.watchlist_status if security_profile.watchlist_status in status_options else "New"
-        status = st.selectbox(
-            "Status",
-            status_options,
-            index=status_options.index(current_status),
-            key=f"workbench_inspector_status_{security_profile.cusip}",
-        )
-        next_step = st.text_input(
-            "Next",
-            key=f"workbench_inspector_next_{security_profile.cusip}",
-            placeholder="Verify / call / monitor",
-        )
-        if st.button("Save CUSIP", key=f"workbench_inspector_save_{security_profile.cusip}"):
-            row_match = summary[summary["cusip"].astype(str) == str(security_profile.cusip)] if not summary.empty and "cusip" in summary.columns else pd.DataFrame()
-            row = row_match.iloc[0] if not row_match.empty else {
-                "cusip": security_profile.cusip,
-                "signal": security_profile.signal,
-                "maturity_bucket": security_profile.maturity_bucket,
-                "current_spread_bps": security_profile.current_spread_bps,
-                "liquidity_score": security_profile.liquidity_score,
-                "rv_score": security_profile.rv_score,
-                "trade_count": security_profile.trade_count,
-                "total_trade_amount": security_profile.total_par,
-                "latest_trade": security_profile.latest_trade_date,
-            }
-            _upsert_focused_watchlist(
-                security_profile.cusip,
-                selection.issuer,
-                "Sidebar Inspector",
-                row,
-                note,
-                status=status,
-                reason=security_profile.signal,
-                next_step=next_step,
-            )
-            st.success(f"Saved {security_profile.cusip}.")
+    return selected_cusip, security_profile
 
 
 def _active_filter_summary(selection: WorkbenchSelection):
@@ -1411,7 +1431,9 @@ def _render_security_drilldown(filtered_df: pd.DataFrame) -> pd.DataFrame:
         cusip_options = detail["cusip"].astype(str).tolist()
         current_cusip = str(st.session_state.get("workbench_selected_cusip") or "")
         default_idx = cusip_options.index(current_cusip) if current_cusip in cusip_options else 0
-        if st.session_state.get("workbench_security_path_select") not in cusip_options:
+        if current_cusip in cusip_options and st.session_state.get("workbench_security_path_select") != current_cusip:
+            st.session_state["workbench_security_path_select"] = current_cusip
+        elif st.session_state.get("workbench_security_path_select") not in cusip_options:
             st.session_state["workbench_security_path_select"] = cusip_options[default_idx]
         selected_cusip = st.selectbox("CUSIP path", cusip_options, index=default_idx, key="workbench_security_path_select")
         st.session_state["workbench_selected_cusip"] = selected_cusip
@@ -1786,9 +1808,8 @@ def render_trading_workbench(
 
     selected_cusip = _best_cusip_for_profile(filtered_issuer, cusip_summary)
     issuer_profile = _build_issuer_profile(filtered_issuer, selection, benchmark_source_mode)
-    security_profile = _build_security_profile(filtered_issuer, cusip_summary, selected_cusip, selected_issuer)
     with st.sidebar:
-        _render_right_inspector(selection, issuer_profile, security_profile, cusip_summary)
+        selected_cusip, security_profile = _render_right_inspector(selection, issuer_profile, filtered_issuer, cusip_summary)
 
     return {
         "selection": selection,
