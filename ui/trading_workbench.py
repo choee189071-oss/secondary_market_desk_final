@@ -1766,22 +1766,22 @@ def render_trading_workbench(
     if selected_cusip:
         st.session_state["workbench_selected_cusip"] = selected_cusip
 
-    left_col, right_col = st.columns([0.74, 0.26], gap="large")
-    with left_col:
-        _render_object_status_bar(selection, filtered_issuer, benchmark_source_mode)
-        _active_filter_summary(selection)
-        _render_summary_cards(filtered_issuer)
+    _render_object_status_bar(selection, filtered_issuer, benchmark_source_mode)
+    _active_filter_summary(selection)
+    _render_summary_cards(filtered_issuer)
 
-        section_anchor("workbench-market-analytics", "3. Market Analytics")
-        st.caption(f"Benchmark source retained for spread calculations: {benchmark_source_mode}. Trading analysis is driven by the uploaded trade tape.")
-        _render_volume_overview(filtered_issuer)
-        a1, a2 = st.columns([0.62, 0.38], gap="large")
-        with a1:
-            _render_activity_concentration_map(filtered_issuer)
-        with a2:
-            _render_participation(filtered_issuer)
-        _render_liquidity_dashboard(filtered_issuer)
+    section_anchor("workbench-market-analytics", "3. Market Analytics")
+    st.caption(f"Benchmark source retained for spread calculations: {benchmark_source_mode}. Trading analysis is driven by the uploaded trade tape.")
+    _render_volume_overview(filtered_issuer)
+    a1, a2 = st.columns([0.58, 0.42], gap="large")
+    with a1:
+        _render_activity_concentration_map(filtered_issuer)
+    with a2:
+        _render_participation(filtered_issuer)
+    _render_liquidity_dashboard(filtered_issuer)
 
+    detail_col, right_col = st.columns([0.72, 0.28], gap="large")
+    with detail_col:
         security_detail = _render_security_drilldown(filtered_issuer)
         cusip_summary = _build_cusip_summary(filtered_issuer)
         peer_metrics, peer_issuers = _render_peer_comparison(prepared, selection, filtered_issuer)
