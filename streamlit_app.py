@@ -1098,36 +1098,68 @@ def _add_source_spread_bps(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_spread_calculation_preview(df: pd.DataFrame, limit: int = 6) -> pd.DataFrame:
-    if df.empty or not {"_spread_raw_numeric", "_spread_multiplier", "spread_bps"}.issubset(df.columns):
+    if df.empty or "spread_bps" not in df.columns:
         return pd.DataFrame()
-    preview = df.dropna(subset=["_spread_raw_numeric", "spread_bps"]).copy()
+    required_cols = ["trade_date", "spread_bps"]
+    if "issuer" in df.columns:
+        required_cols.append("issuer")
+    preview = df.dropna(subset=required_cols).copy()
     if preview.empty:
         return pd.DataFrame()
-    sort_cols = [c for c in ["trade_date", "issuer", "cusip"] if c in preview.columns]
-    if sort_cols:
-        preview = preview.sort_values(sort_cols)
-    preview = preview.head(limit)
+    preview["trade_date"] = pd.to_datetime(preview["trade_date"], errors="coerce").dt.normalize()
+    preview["spread_bps"] = pd.to_numeric(preview["spread_bps"], errors="coerce")
+    preview = preview.dropna(subset=["trade_date", "spread_bps"])
+    if preview.empty:
+        return pd.DataFrame()
+
+    group_cols = ["trade_date"]
+    if "issuer" in preview.columns:
+        group_cols.append("issuer")
+
+    daily = (
+        preview.groupby(group_cols, as_index=False)
+        .agg(
+            trade_count=("spread_bps", "count"),
+            spread_sum=("spread_bps", "sum"),
+            avg_spread_bps=("spread_bps", "mean"),
+        )
+        .sort_values(group_cols)
+        .head(limit)
+    )
+    if "cusip" in preview.columns:
+        cusip_counts = (
+            preview.groupby(group_cols)["cusip"]
+            .nunique(dropna=True)
+            .reset_index(name="cusip_count")
+        )
+        daily = daily.merge(cusip_counts, on=group_cols, how="left")
+    else:
+        daily["cusip_count"] = pd.NA
+    spread_inputs = (
+        preview.groupby(group_cols)["spread_bps"]
+        .apply(lambda s: ", ".join(f"{float(x):+.1f}" for x in pd.to_numeric(s, errors="coerce").dropna().head(5)))
+        .reset_index(name="spread_inputs")
+    )
+    daily = daily.merge(spread_inputs, on=group_cols, how="left")
+
     rows = []
-    for _, row in preview.iterrows():
-        raw_value = row.get("_spread_raw_numeric")
-        multiplier = row.get("_spread_multiplier", 1)
-        spread_value = row.get("spread_bps")
-        calculation = ""
-        if pd.notna(raw_value):
-            calculation = (
-                f"{float(raw_value):.3f} already bps"
-                if float(multiplier) == 1
-                else f"{float(raw_value):.3f} x {int(multiplier)}"
-            )
+    for _, row in daily.iterrows():
+        trade_count = int(row.get("trade_count", 0) or 0)
+        spread_sum = row.get("spread_sum")
+        avg_spread = row.get("avg_spread_bps")
         rows.append(
             {
                 "Trade Date": _fmt_date(row.get("trade_date")),
                 "Issuer": row.get("issuer", ""),
-                "CUSIP": row.get("cusip", ""),
-                "Maturity": row.get("maturity_bucket", row.get("maturity_year", "")),
-                "Spread Column": "" if pd.isna(raw_value) else f"{float(raw_value):.3f}",
-                "Calculation": calculation,
-                "Spread": "" if pd.isna(spread_value) else f"{float(spread_value):+.1f} bps",
+                "Trades": trade_count,
+                "CUSIPs": "" if pd.isna(row.get("cusip_count")) else int(row.get("cusip_count")),
+                "Spread Inputs": row.get("spread_inputs", ""),
+                "Calculation": (
+                    ""
+                    if pd.isna(spread_sum) or trade_count == 0
+                    else f"{float(spread_sum):+.1f} bps / {trade_count}"
+                ),
+                "Daily Avg Spread": "" if pd.isna(avg_spread) else f"{float(avg_spread):+.1f} bps",
             }
         )
     return pd.DataFrame(rows)
@@ -1193,7 +1225,7 @@ def _render_slide_quote(title: str, quote: str, evidence: list[str] | None = Non
 
 
 def render_spread_trend_readthrough(df: pd.DataFrame, primary_issuer: str, compare_issuers: list[str] | None = None):
-    """Spread trend commentary built from daily median spread factors."""
+    """Spread trend commentary built from daily average spread factors."""
     if df is None or df.empty:
         return
     date_col = _first_existing_col(df, ["trade_date", "date"])
@@ -1210,7 +1242,7 @@ def render_spread_trend_readthrough(df: pd.DataFrame, primary_issuer: str, compa
     if d.empty:
         return
     daily = d.groupby([pd.Grouper(key=date_col, freq="D"), issuer_col], as_index=False).agg(
-        spread_bps=(spread_col, "median"), trade_count=(spread_col, "count")
+        spread_bps=(spread_col, "mean"), trade_count=(spread_col, "count")
     ).sort_values(date_col)
     primary = daily[daily[issuer_col].astype(str) == str(primary_issuer)]
     if primary.empty:
@@ -2874,7 +2906,7 @@ if advanced_group == "Core Evidence":
             if not selected_spread_df.empty:
                 issuer_daily = (
                     selected_spread_df.groupby([pd.Grouper(key="trade_date", freq="D"), "issuer"], as_index=False)
-                    .agg(spread_bps=("spread_bps", "median"), trade_count=("spread_bps", "count"))
+                    .agg(spread_bps=("spread_bps", "mean"), trade_count=("spread_bps", "count"))
                     .dropna(subset=["spread_bps"])
                     .sort_values("trade_date")
                 )
@@ -2901,7 +2933,7 @@ if advanced_group == "Core Evidence":
                     if not sector_df.empty:
                         sector_daily = (
                             sector_df.groupby(pd.Grouper(key="trade_date", freq="D"), as_index=False)
-                            .agg(spread_bps=("spread_bps", "median"))
+                            .agg(spread_bps=("spread_bps", "mean"))
                             .dropna(subset=["spread_bps"])
                             .sort_values("trade_date")
                         )
@@ -2920,7 +2952,7 @@ if advanced_group == "Core Evidence":
             if "All Uploaded Issuers Average" in snapshot_reference_lines:
                 all_daily = (
                     spread_universe.groupby(pd.Grouper(key="trade_date", freq="D"), as_index=False)
-                    .agg(spread_bps=("spread_bps", "median"))
+                    .agg(spread_bps=("spread_bps", "mean"))
                     .dropna(subset=["spread_bps"])
                     .sort_values("trade_date")
                 )
@@ -2953,7 +2985,7 @@ if advanced_group == "Core Evidence":
 
             if fig_spread_snapshot.data:
                 fig_spread_snapshot.update_layout(
-                    title="Multi-Issuer Spread Trend",
+                    title="Multi-Issuer Average Spread Trend",
                     xaxis_title="Trade Date",
                     yaxis_title="Spread (bps)",
                     height=560,
@@ -2964,7 +2996,7 @@ if advanced_group == "Core Evidence":
                 safe_plotly_chart(fig_spread_snapshot, width="stretch")
                 calc_preview = _build_spread_calculation_preview(spread_universe, limit=6)
                 if not calc_preview.empty:
-                    st.caption("Spread calculation preview: using the uploaded/source spread column.")
+                    st.caption("Spread calculation preview: daily average of the uploaded/source spread column.")
                     safe_dataframe(calc_preview, width="stretch", hide_index=True, auto_collapse=False, max_rows=6)
                 render_spread_trend_readthrough(spread_universe, selected_issuer, snapshot_issuers)
             else:
@@ -3074,9 +3106,9 @@ if advanced_group == "Core Evidence":
         if not _metric_source.empty and any(c in _metric_source.columns for c in ["source_spread_bps", "spread"]):
             _metric_source = _add_source_spread_bps(_metric_source)
             _spread_bps = pd.to_numeric(_metric_source["spread_bps"], errors="coerce")
-            clean_metric_card("Primary Median Spread", "N/A" if _spread_bps.dropna().empty else f"{_spread_bps.median():.1f} bps", size="small")
+            clean_metric_card("Primary Avg Spread", "N/A" if _spread_bps.dropna().empty else f"{_spread_bps.mean():.1f} bps", size="small")
         else:
-            clean_metric_card("Primary Median Spread", "N/A", size="small")
+            clean_metric_card("Primary Avg Spread", "N/A", size="small")
     with snap_col_b:
         if not snapshot_base.empty and "trade_amount" in snapshot_base.columns:
             _amt = pd.to_numeric(snapshot_base["trade_amount"], errors="coerce").sum()
