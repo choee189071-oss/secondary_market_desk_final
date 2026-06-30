@@ -1956,10 +1956,6 @@ def _scope_nunique(df: pd.DataFrame | None, column: str) -> int:
     return int(df[column].dropna().astype(str).nunique())
 
 
-SECTION6_MATURITY_YEAR_OPTIONS = [f"{year}Y" for year in range(1, MAX_MATURITY_YEAR + 1)]
-SECTION6_MAX_DYNAMIC_FILTER_OPTIONS = 500
-
-
 def _section6_filter_label(values: tuple[object, ...] | list[object], all_label: str = "All") -> str:
     if not values:
         return all_label
@@ -2000,13 +1996,6 @@ def _section6_format_coupon_value(value: object) -> object:
     return text
 
 
-def _section6_coupon_sort_key(value: object) -> tuple[int, float | str]:
-    try:
-        return (0, float(str(value).replace("%", "").strip()))
-    except Exception:
-        return (1, str(value))
-
-
 def _section6_ensure_filter_columns(df: pd.DataFrame | None) -> pd.DataFrame:
     if not isinstance(df, pd.DataFrame) or df.empty:
         return pd.DataFrame() if df is None else df.copy()
@@ -2031,68 +2020,6 @@ def _section6_ensure_filter_columns(df: pd.DataFrame | None) -> pd.DataFrame:
                 coupon_labels = coupon_labels.combine_first(out[col].map(_section6_format_coupon_value))
         out["workbench_coupon"] = coupon_labels
     return out
-
-
-def _section6_unique_options(df: pd.DataFrame, column: str, *, coupon_sort: bool = False) -> list[str]:
-    if df.empty or column not in df.columns:
-        return []
-    values = [
-        str(v)
-        for v in df[column].dropna().astype(str).unique().tolist()
-        if str(v).strip() and str(v).strip().lower() not in {"nan", "none", "unknown", "<na>"}
-    ]
-    if coupon_sort:
-        return sorted(values, key=_section6_coupon_sort_key)
-    return sorted(values)
-
-
-def _section6_has_filter_values(df: pd.DataFrame, column: str) -> bool:
-    if df.empty or column not in df.columns:
-        return False
-    return df[column].notna().any()
-
-
-def _section6_search_options(
-    df: pd.DataFrame,
-    column: str,
-    query: str = "",
-    *,
-    limit: int = SECTION6_MAX_DYNAMIC_FILTER_OPTIONS,
-    sort_key=None,
-) -> tuple[list[str], bool]:
-    if df.empty or column not in df.columns:
-        return [], False
-
-    series = df[column].dropna().astype(str).str.strip()
-    series = series[
-        (series != "")
-        & (~series.str.lower().isin({"nan", "none", "unknown", "<na>"}))
-    ]
-    query = str(query or "").strip()
-    if query:
-        series = series[series.str.upper().str.contains(re.escape(query.upper()), na=False)]
-
-    values = series.drop_duplicates().tolist()
-    values = sorted(values, key=sort_key) if sort_key else sorted(values)
-    limited = len(values) > limit
-    return values[:limit], limited
-
-
-def _section6_filter_existing_values(
-    df: pd.DataFrame,
-    column: str,
-    values: list[object] | tuple[object, ...],
-) -> list[str]:
-    if df.empty or column not in df.columns or not values:
-        return []
-
-    series = df[column].dropna().astype(str)
-    existing: list[str] = []
-    for value in values:
-        value_text = str(value).strip()
-        if value_text and series.eq(value_text).any():
-            existing.append(value_text)
-    return existing
 
 
 def _prepare_benchmark_daily_curve(
@@ -2128,134 +2055,6 @@ def _prepare_benchmark_daily_curve(
     return curve
 
 
-def _render_section6_filters(section2_market_df: pd.DataFrame, selected_issuer: str) -> dict:
-    option_source = section2_market_df.copy()
-    if "issuer" in option_source.columns:
-        issuer_source = option_source[option_source["issuer"].astype(str) == str(selected_issuer)].copy()
-        if not issuer_source.empty:
-            option_source = issuer_source
-
-    st.caption("Section 6 starts with Section 2 filters; set advanced filters, then apply them together.")
-    coupon_available = _section6_has_filter_values(option_source, "workbench_coupon")
-    cusip_available = _section6_has_filter_values(option_source, "cusip")
-    with st.form("section6_filter_form", border=False):
-        c1, c2, c3 = st.columns([1, 1, 1.25])
-        with c1:
-            current_years = [
-                label for label in st.session_state.get("section6_maturity_years", []) if label in SECTION6_MATURITY_YEAR_OPTIONS
-            ]
-            if st.session_state.get("section6_maturity_years") != current_years:
-                st.session_state["section6_maturity_years"] = current_years
-            maturity_labels = tuple(
-                st.multiselect(
-                    "Section 6 Maturity Years",
-                    SECTION6_MATURITY_YEAR_OPTIONS,
-                    key="section6_maturity_years",
-                    placeholder="All maturity years",
-                    help="Leave empty to include all maturity years.",
-                )
-            )
-
-        with c2:
-            coupon_options, coupon_limited = _section6_search_options(
-                option_source,
-                "workbench_coupon",
-                "",
-                sort_key=_section6_coupon_sort_key,
-            )
-            current_coupons = _section6_filter_existing_values(
-                option_source,
-                "workbench_coupon",
-                st.session_state.get("section6_coupon_values", []),
-            )
-            coupon_options = list(dict.fromkeys(current_coupons + coupon_options))
-            if st.session_state.get("section6_coupon_values") != current_coupons:
-                st.session_state["section6_coupon_values"] = current_coupons
-            coupon_values: tuple[str, ...] = ()
-            if coupon_available:
-                coupon_values = tuple(
-                    st.multiselect(
-                        "Section 6 Coupons",
-                        coupon_options,
-                        key="section6_coupon_values",
-                        placeholder="All coupons",
-                        help="Leave empty to include all coupon values.",
-                    )
-                )
-                if coupon_limited:
-                    st.caption(f"Showing first {SECTION6_MAX_DYNAMIC_FILTER_OPTIONS:,} coupon values.")
-            else:
-                st.multiselect("Section 6 Coupons", [], key="section6_coupon_values_empty", placeholder="No coupons", disabled=True)
-
-        with c3:
-            cusip_search = st.text_input(
-                "Section 6 Search CUSIP",
-                key="section6_cusip_search",
-                placeholder="Type at least 2 characters",
-                disabled=not cusip_available,
-            )
-            current_cusips = _section6_filter_existing_values(
-                option_source,
-                "cusip",
-                st.session_state.get("section6_cusips", []),
-            )
-            if len(str(cusip_search or "").strip()) >= 2:
-                cusip_matches, cusip_limited = _section6_search_options(option_source, "cusip", cusip_search)
-            else:
-                cusip_matches, cusip_limited = [], False
-            cusip_options = list(dict.fromkeys(current_cusips + cusip_matches))
-            if st.session_state.get("section6_cusips") != current_cusips:
-                st.session_state["section6_cusips"] = current_cusips
-            cusips: tuple[str, ...] = ()
-            if not cusip_available:
-                st.multiselect("Section 6 CUSIPs", [], key="section6_cusips_empty", placeholder="No CUSIPs", disabled=True)
-            else:
-                cusips = tuple(
-                    st.multiselect(
-                        "Section 6 CUSIPs",
-                        cusip_options,
-                        key="section6_cusips",
-                        placeholder="All CUSIPs",
-                        help="Leave empty to include all CUSIPs. Search first to load matching options.",
-                    )
-                )
-                if not cusip_options:
-                    st.caption("Search at least 2 CUSIP characters to load dropdown options.")
-                elif cusip_limited:
-                    st.caption(f"Showing first {SECTION6_MAX_DYNAMIC_FILTER_OPTIONS:,} CUSIP matches. Type more to narrow.")
-
-        apply_col, note_col = st.columns([0.2, 0.8])
-        with apply_col:
-            st.form_submit_button("Apply Section 6 filters", type="primary")
-        with note_col:
-            st.caption("Empty multi-select means All. Section 6 filters update only when submitted.")
-
-    maturity_years = tuple(int(str(label).replace("Y", "")) for label in maturity_labels)
-    return {
-        "maturity_years": maturity_years,
-        "maturity_labels": tuple(maturity_labels),
-        "coupon_values": coupon_values,
-        "cusips": cusips,
-    }
-
-
-def _apply_section6_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
-    out = _section6_ensure_filter_columns(df)
-    if out.empty:
-        return out
-    maturity_years = tuple(filters.get("maturity_years") or ())
-    if maturity_years and "workbench_maturity_year" in out.columns:
-        years = pd.to_numeric(out["workbench_maturity_year"], errors="coerce")
-        out = out[years.isin(list(maturity_years))].copy()
-    coupon_values = tuple(filters.get("coupon_values") or ())
-    if coupon_values and "workbench_coupon" in out.columns:
-        out = out[out["workbench_coupon"].astype(str).isin([str(x) for x in coupon_values])].copy()
-    cusips = tuple(filters.get("cusips") or ())
-    if cusips and "cusip" in out.columns:
-        out = out[out["cusip"].astype(str).isin([str(x) for x in cusips])].copy()
-    return out
-
-
 # Focused upload helpers live in ui/upload.py; shared card helpers live in ui/common.py.
 
 
@@ -2276,11 +2075,17 @@ def render_advanced_audit_gateway(
     section2_market_df = _section6_ensure_filter_columns(filtered_market_df)
     if section2_market_df.empty and isinstance(filtered_issuer_df, pd.DataFrame):
         section2_market_df = _section6_ensure_filter_columns(filtered_issuer_df)
+    if isinstance(filtered_issuer_df, pd.DataFrame) and not filtered_issuer_df.empty:
+        section2_issuer_df = _section6_ensure_filter_columns(filtered_issuer_df)
+    elif "issuer" in section2_market_df.columns:
+        section2_issuer_df = section2_market_df[section2_market_df["issuer"].astype(str) == str(selected_issuer)].copy()
+    else:
+        section2_issuer_df = section2_market_df.copy()
     section_anchor("advanced-analysis", "6. Advanced Analysis")
     st.markdown(
         f"""
 <div class="focus-band">
-  <b>Active scope:</b> Section 6 and the advanced modules below start from Section 2, then apply the independent Section 6 filters here. &nbsp; | &nbsp;
+  <b>Active scope:</b> Section 2 Trading Filters control every chart, table, and audit module below. No separate Section 6 filter is applied. &nbsp; | &nbsp;
   <b>Issuer:</b> {safe_issuer} &nbsp; | &nbsp;
   <b>Sector:</b> {safe_sector} &nbsp; | &nbsp;
   <b>Benchmark:</b> {safe_benchmark}
@@ -2288,30 +2093,30 @@ def render_advanced_audit_gateway(
 """,
         unsafe_allow_html=True,
     )
-    section6_filters = _render_section6_filters(section2_market_df, selected_issuer)
-    section6_market_df = _apply_section6_filters(section2_market_df, section6_filters)
-    if "issuer" in section6_market_df.columns:
-        section6_issuer_df = section6_market_df[section6_market_df["issuer"].astype(str) == str(selected_issuer)].copy()
-    else:
-        section6_issuer_df = section6_market_df.copy()
 
-    universe_rows = len(section6_market_df) if isinstance(section6_market_df, pd.DataFrame) else 0
-    issuer_rows = len(section6_issuer_df) if isinstance(section6_issuer_df, pd.DataFrame) else 0
-    universe_cusips = _scope_nunique(section6_market_df, "cusip")
-    issuer_cusips = _scope_nunique(section6_issuer_df, "cusip")
+    universe_rows = len(section2_market_df) if isinstance(section2_market_df, pd.DataFrame) else 0
+    issuer_rows = len(section2_issuer_df) if isinstance(section2_issuer_df, pd.DataFrame) else 0
+    universe_cusips = _scope_nunique(section2_market_df, "cusip")
+    issuer_cusips = _scope_nunique(section2_issuer_df, "cusip")
     date_scope = html.escape(_scope_date_text(workbench_selection, filtered_market_df), quote=True)
+    selected_maturity_years = tuple(
+        f"{int(year)}Y"
+        for year in (getattr(workbench_selection, "maturity_years", ()) or ())
+        if pd.notna(year)
+    )
     maturity_scope = html.escape(
-        _section6_filter_label(section6_filters.get("maturity_labels", ()), _scope_attr(workbench_selection, "maturity_bucket", "All")),
+        _section6_filter_label(selected_maturity_years, _scope_attr(workbench_selection, "maturity_bucket", "All")),
         quote=True,
     )
-    coupon_scope = html.escape(_section6_filter_label(section6_filters.get("coupon_values", ()), "All"), quote=True)
-    cusip_scope = html.escape(_section6_filter_label(section6_filters.get("cusips", ()), "All"), quote=True)
+    coupon_scope = html.escape(_section6_filter_label(getattr(workbench_selection, "coupon_values", ()) or (), "All"), quote=True)
+    cusip_scope = html.escape(_section6_filter_label(getattr(workbench_selection, "cusips", ()) or (), "All"), quote=True)
     size_scope = html.escape(_scope_attr(workbench_selection, "trade_size_bucket", "All"), quote=True)
     type_scope = html.escape(_scope_attr(workbench_selection, "trade_type_bucket", "All"), quote=True)
     lot_scope = html.escape(_scope_attr(workbench_selection, "lot_bucket", "All"), quote=True)
     st.markdown(
         f"""
 <div class="scope-chip-row">
+  <div class="scope-chip"><b>Filter Source</b> Section 2 only</div>
   <div class="scope-chip"><b>Universe</b> {universe_rows:,} rows / {universe_cusips:,} CUSIPs</div>
   <div class="scope-chip"><b>Issuer</b> {issuer_rows:,} rows / {issuer_cusips:,} CUSIPs</div>
   <div class="scope-chip"><b>Date</b> {date_scope}</div>
@@ -2340,9 +2145,9 @@ def render_advanced_audit_gateway(
             unsafe_allow_html=True,
         )
     return {
-        "filters": section6_filters,
-        "filtered_market_df": section6_market_df,
-        "filtered_issuer_df": section6_issuer_df,
+        "filters": {"source": "section2_trading_filters"},
+        "filtered_market_df": section2_market_df,
+        "filtered_issuer_df": section2_issuer_df,
     }
 
 
