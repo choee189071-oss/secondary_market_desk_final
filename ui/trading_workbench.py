@@ -160,7 +160,29 @@ def _parse_maturity_year(value: object) -> float:
         return np.nan
 
 
-def _maturity_years(df: pd.DataFrame) -> pd.Series:
+def _is_treasury_index(value: object) -> bool:
+    text = str(value or "").strip().upper()
+    return bool(re.search(r"\b(UST|TREAS|TREASURY|US\s*T)\b", text))
+
+
+def _parse_muni_index_maturity_year(value: object) -> float:
+    if pd.isna(value) or _is_treasury_index(value):
+        return np.nan
+    return _parse_maturity_year(value)
+
+
+def _index_maturity_years(df: pd.DataFrame) -> pd.Series:
+    out = pd.Series(np.nan, index=df.index, dtype="float64")
+    if "index" in df.columns:
+        out = out.combine_first(df["index"].apply(_parse_muni_index_maturity_year))
+    for col in ["active_benchmark_tenor", "mmd_tenor"]:
+        if col in df.columns:
+            parsed = df[col].apply(_parse_maturity_year)
+            out = out.combine_first(parsed)
+    return out
+
+
+def _dated_maturity_years(df: pd.DataFrame) -> pd.Series:
     if "maturity_year" in df.columns:
         raw = df["maturity_year"]
     elif "years_to_maturity" in df.columns:
@@ -172,6 +194,29 @@ def _maturity_years(df: pd.DataFrame) -> pd.Series:
     else:
         raw = pd.Series(np.nan, index=df.index)
     return raw.apply(_parse_maturity_year)
+
+
+def _maturity_years(df: pd.DataFrame) -> pd.Series:
+    index_years = _index_maturity_years(df)
+    dated_years = _dated_maturity_years(df)
+    if "index" in df.columns:
+        treasury_index = df["index"].apply(_is_treasury_index)
+        dated_years = dated_years.mask(treasury_index)
+    return index_years.combine_first(dated_years)
+
+
+def _maturity_year_source(df: pd.DataFrame) -> pd.Series:
+    index_years = _index_maturity_years(df)
+    dated_years = _dated_maturity_years(df)
+    treasury_index = df["index"].apply(_is_treasury_index) if "index" in df.columns else pd.Series(False, index=df.index)
+    return pd.Series(
+        np.where(
+            index_years.notna(),
+            "Index/M",
+            np.where(treasury_index, "UST excluded", np.where(dated_years.notna(), "Maturity date", "Unknown")),
+        ),
+        index=df.index,
+    )
 
 
 def _maturity_segment(years: object) -> str:
@@ -406,6 +451,7 @@ def prepare_workbench_data(market_df: pd.DataFrame) -> pd.DataFrame:
     base["yield"] = pd.to_numeric(base["yield"], errors="coerce") if "yield" in base.columns else pd.Series(np.nan, index=base.index)
     base["spread_bps"] = pd.to_numeric(base["spread_bps"], errors="coerce") if "spread_bps" in base.columns else pd.Series(np.nan, index=base.index)
     base["workbench_maturity_year"] = _maturity_years(base)
+    base["workbench_maturity_source"] = _maturity_year_source(base)
     base["workbench_maturity_bucket"] = base["workbench_maturity_year"].map(_maturity_segment)
     base["workbench_maturity_label"] = base["workbench_maturity_year"].map(_maturity_year_label)
     base["workbench_coupon"] = _coupon_labels(base)
@@ -1747,11 +1793,11 @@ def render_trading_workbench(
                 st.session_state["workbench_maturity_years"] = current_year_labels
             maturity_year_labels = tuple(
                 st.multiselect(
-                    "Maturity Years",
+                    "Maturity Years (Index/M)",
                     MATURITY_YEAR_OPTIONS,
                     key="workbench_maturity_years",
                     placeholder="All maturity years",
-                    help="Leave empty to include all maturity years.",
+                    help="Uses Index/Bnch Year tenor such as AAA-20 first. UST/Treasury index rows are excluded from this maturity filter; maturity date is only a fallback for non-UST rows without usable Index/M.",
                 )
             )
             maturity_years = tuple(int(str(label).replace("Y", "")) for label in maturity_year_labels)

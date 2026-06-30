@@ -189,6 +189,8 @@ def parse_trade_index_tenor(index_value: object) -> str | None:
     if pd.isna(index_value):
         return None
     text = str(index_value).upper().strip()
+    if re.search(r"\b(UST|TREAS|TREASURY|US\s*T)\b", text):
+        return None
     m = re.search(r"(\d{1,2})\s*Y?$", text)
     if not m:
         return None

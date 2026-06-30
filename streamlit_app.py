@@ -1220,7 +1220,7 @@ def _build_spread_audit_rows(df: pd.DataFrame) -> pd.DataFrame:
         audit["spread_bps"] = pd.to_numeric(audit["spread_bps"], errors="coerce")
     preferred_cols = [
         "trade_date", "issuer", "cusip", "maturity_bucket", "workbench_maturity_year",
-        "workbench_coupon", "coupon", "coupon_trade", "yield", "spread", "_spread_raw_numeric",
+        "workbench_maturity_source", "workbench_coupon", "coupon", "coupon_trade", "yield", "spread", "_spread_raw_numeric",
         "_spread_multiplier", "source_spread_bps", "spread_bps", "price", "trade_amount",
         "trade_type", "index", "index_rate", "description", "source_file",
     ]
@@ -1233,6 +1233,7 @@ def _build_spread_audit_rows(df: pd.DataFrame) -> pd.DataFrame:
         "cusip": "CUSIP",
         "maturity_bucket": "Maturity",
         "workbench_maturity_year": "Maturity Year Filter",
+        "workbench_maturity_source": "Maturity Source",
         "workbench_coupon": "Coupon Filter",
         "coupon": "Coupon",
         "coupon_trade": "Trade Coupon",
@@ -1983,6 +1984,17 @@ def _section6_parse_maturity_year(value: object) -> float:
         return np.nan
 
 
+def _section6_is_treasury_index(value: object) -> bool:
+    text = str(value or "").strip().upper()
+    return bool(re.search(r"\b(UST|TREAS|TREASURY|US\s*T)\b", text))
+
+
+def _section6_parse_muni_index_year(value: object) -> float:
+    if pd.isna(value) or _section6_is_treasury_index(value):
+        return np.nan
+    return _section6_parse_maturity_year(value)
+
+
 def _section6_format_coupon_value(value: object) -> object:
     if pd.isna(value):
         return pd.NA
@@ -2001,18 +2013,47 @@ def _section6_ensure_filter_columns(df: pd.DataFrame | None) -> pd.DataFrame:
         return pd.DataFrame() if df is None else df.copy()
     out = df.copy()
     if "workbench_maturity_year" not in out.columns:
-        if "maturity_year" in out.columns:
-            out["workbench_maturity_year"] = out["maturity_year"].apply(_section6_parse_maturity_year)
-        elif "years_to_maturity" in out.columns:
-            out["workbench_maturity_year"] = pd.to_numeric(out["years_to_maturity"], errors="coerce").apply(_section6_parse_maturity_year)
-        elif {"maturity", "trade_date"}.issubset(out.columns):
+        if "index" in out.columns:
+            index_years = out["index"].apply(_section6_parse_muni_index_year)
+            out["workbench_maturity_year"] = index_years
+            treasury_index = out["index"].apply(_section6_is_treasury_index)
+        else:
+            treasury_index = pd.Series(False, index=out.index)
+        if "workbench_maturity_year" not in out.columns or out["workbench_maturity_year"].isna().all():
+            out["workbench_maturity_year"] = pd.Series(np.nan, index=out.index)
+        missing_maturity_year = out["workbench_maturity_year"].isna()
+        fallback_allowed = ~treasury_index
+        if "maturity_year" in out.columns and missing_maturity_year.any():
+            fallback = out["maturity_year"].apply(_section6_parse_maturity_year)
+            fill_mask = missing_maturity_year & fallback_allowed
+            out.loc[fill_mask, "workbench_maturity_year"] = fallback[fill_mask]
+            missing_maturity_year = out["workbench_maturity_year"].isna()
+        if "years_to_maturity" in out.columns and missing_maturity_year.any():
+            fallback = pd.to_numeric(out["years_to_maturity"], errors="coerce").apply(_section6_parse_maturity_year)
+            fill_mask = missing_maturity_year & fallback_allowed
+            out.loc[fill_mask, "workbench_maturity_year"] = fallback[fill_mask]
+            missing_maturity_year = out["workbench_maturity_year"].isna()
+        if {"maturity", "trade_date"}.issubset(out.columns) and missing_maturity_year.any():
             maturity = pd.to_datetime(out["maturity"], errors="coerce")
             trade_date = pd.to_datetime(out["trade_date"], errors="coerce")
-            out["workbench_maturity_year"] = ((maturity - trade_date).dt.days / 365.25).apply(_section6_parse_maturity_year)
-        elif "maturity_bucket" in out.columns:
-            out["workbench_maturity_year"] = out["maturity_bucket"].apply(_section6_parse_maturity_year)
+            fallback = ((maturity - trade_date).dt.days / 365.25).apply(_section6_parse_maturity_year)
+            fill_mask = missing_maturity_year & fallback_allowed
+            out.loc[fill_mask, "workbench_maturity_year"] = fallback[fill_mask]
+            missing_maturity_year = out["workbench_maturity_year"].isna()
+        if "maturity_bucket" in out.columns and missing_maturity_year.any():
+            fallback = out["maturity_bucket"].apply(_section6_parse_maturity_year)
+            fill_mask = missing_maturity_year & fallback_allowed
+            out.loc[fill_mask, "workbench_maturity_year"] = fallback[fill_mask]
+    if "workbench_maturity_source" not in out.columns:
+        if "index" in out.columns:
+            index_years = out["index"].apply(_section6_parse_muni_index_year)
+            treasury_index = out["index"].apply(_section6_is_treasury_index)
+            out["workbench_maturity_source"] = np.where(index_years.notna(), "Index/M", np.where(treasury_index, "UST excluded", "Fallback"))
         else:
-            out["workbench_maturity_year"] = np.nan
+            out["workbench_maturity_source"] = "Fallback"
+        if "workbench_maturity_year" in out.columns:
+            missing_source = out["workbench_maturity_year"].isna() & (out["workbench_maturity_source"] != "UST excluded")
+            out.loc[missing_source, "workbench_maturity_source"] = "Unknown"
     if "workbench_coupon" not in out.columns:
         coupon_labels = pd.Series(pd.NA, index=out.index, dtype="object")
         for col in ["coupon", "coupon_trade", "coupon_bond"]:
