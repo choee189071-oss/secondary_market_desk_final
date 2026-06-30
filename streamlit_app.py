@@ -1064,6 +1064,75 @@ def _fmt_mm(x, digits: int = 1) -> str:
         return "N/A"
 
 
+def _infer_spread_multiplier(raw_spread: pd.Series) -> int:
+    cleaned = pd.to_numeric(raw_spread, errors="coerce").abs().dropna()
+    if cleaned.empty:
+        return 1
+    median_abs = cleaned.median()
+    p95_abs = cleaned.quantile(0.95)
+    return 100 if pd.notna(median_abs) and median_abs <= 2 and pd.notna(p95_abs) and p95_abs <= 5 else 1
+
+
+def _add_source_spread_bps(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate displayed spread from the uploaded/source spread column."""
+    out = df.copy()
+    out["_yield_numeric"] = pd.to_numeric(out["yield"], errors="coerce") if "yield" in out.columns else pd.NA
+    if "spread" in out.columns and pd.to_numeric(out["spread"], errors="coerce").notna().any():
+        raw_spread = pd.to_numeric(out["spread"], errors="coerce")
+        multiplier = _infer_spread_multiplier(raw_spread)
+        out["_spread_raw_numeric"] = raw_spread
+        out["_spread_multiplier"] = multiplier
+        out["spread_bps"] = raw_spread * multiplier
+        out["spread_calc_source"] = "Source spread column"
+    elif "source_spread_bps" in out.columns and pd.to_numeric(out["source_spread_bps"], errors="coerce").notna().any():
+        out["_spread_raw_numeric"] = pd.to_numeric(out["source_spread_bps"], errors="coerce")
+        out["_spread_multiplier"] = 1
+        out["spread_bps"] = pd.to_numeric(out["source_spread_bps"], errors="coerce")
+        out["spread_calc_source"] = "Source spread column"
+    else:
+        out["_spread_raw_numeric"] = pd.NA
+        out["_spread_multiplier"] = 1
+        out["spread_bps"] = pd.NA
+        out["spread_calc_source"] = "Unavailable"
+    return out
+
+
+def _build_spread_calculation_preview(df: pd.DataFrame, limit: int = 6) -> pd.DataFrame:
+    if df.empty or not {"_spread_raw_numeric", "_spread_multiplier", "spread_bps"}.issubset(df.columns):
+        return pd.DataFrame()
+    preview = df.dropna(subset=["_spread_raw_numeric", "spread_bps"]).copy()
+    if preview.empty:
+        return pd.DataFrame()
+    sort_cols = [c for c in ["trade_date", "issuer", "cusip"] if c in preview.columns]
+    if sort_cols:
+        preview = preview.sort_values(sort_cols)
+    preview = preview.head(limit)
+    rows = []
+    for _, row in preview.iterrows():
+        raw_value = row.get("_spread_raw_numeric")
+        multiplier = row.get("_spread_multiplier", 1)
+        spread_value = row.get("spread_bps")
+        calculation = ""
+        if pd.notna(raw_value):
+            calculation = (
+                f"{float(raw_value):.3f} already bps"
+                if float(multiplier) == 1
+                else f"{float(raw_value):.3f} x {int(multiplier)}"
+            )
+        rows.append(
+            {
+                "Trade Date": _fmt_date(row.get("trade_date")),
+                "Issuer": row.get("issuer", ""),
+                "CUSIP": row.get("cusip", ""),
+                "Maturity": row.get("maturity_bucket", row.get("maturity_year", "")),
+                "Spread Column": "" if pd.isna(raw_value) else f"{float(raw_value):.3f}",
+                "Calculation": calculation,
+                "Spread": "" if pd.isna(spread_value) else f"{float(spread_value):+.1f} bps",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _fmt_month(x) -> str:
     try:
         return pd.to_datetime(x).strftime("%b %Y")
@@ -1352,12 +1421,9 @@ def render_analyst_pack(market_df: pd.DataFrame, selected_issuer: str):
             if "issuer" in tmp.columns:
                 tmp = tmp[tmp["issuer"].astype(str) == str(selected_issuer)]
             if not tmp.empty:
-                if "spread" in tmp.columns:
-                    tmp["_spread_bps"] = pd.to_numeric(tmp["spread"], errors="coerce") * 100
-                elif {"yield", "index_rate"}.issubset(tmp.columns):
-                    tmp["_spread_bps"] = (pd.to_numeric(tmp["yield"], errors="coerce") - pd.to_numeric(tmp["index_rate"], errors="coerce")) * 100
-                if {"trade_date", "_spread_bps"}.issubset(tmp.columns):
-                    render_spread_trend_readthrough(tmp.rename(columns={"_spread_bps":"spread_bps"}), selected_issuer, [])
+                tmp = _add_source_spread_bps(tmp)
+                if {"trade_date", "spread_bps"}.issubset(tmp.columns):
+                    render_spread_trend_readthrough(tmp, selected_issuer, [])
                 if {"trade_date", "trade_amount", "issuer"}.issubset(market_df.columns):
                     render_volume_readthrough(market_df, selected_issuer)
     except Exception as e:
@@ -2794,18 +2860,12 @@ if advanced_group == "Core Evidence":
                 & (pd.to_datetime(spread_universe["trade_date"], errors="coerce").dt.date <= trade_date_range[1])
             ].copy()
 
-        if not spread_universe.empty and {"trade_date", "yield", "issuer"}.issubset(spread_universe.columns):
+        has_source_spread = any(c in spread_universe.columns for c in ["source_spread_bps", "spread"])
+        if not spread_universe.empty and {"trade_date", "issuer"}.issubset(spread_universe.columns) and has_source_spread:
             spread_universe["trade_date"] = pd.to_datetime(spread_universe["trade_date"], errors="coerce")
-            spread_universe["yield"] = pd.to_numeric(spread_universe["yield"], errors="coerce")
-            if "spread" in spread_universe.columns and spread_universe["spread"].notna().any():
-                spread_universe["spread_bps"] = pd.to_numeric(spread_universe["spread"], errors="coerce") * 100
-            elif "index_rate" in spread_universe.columns:
-                spread_universe["spread_bps"] = (
-                    pd.to_numeric(spread_universe["yield"], errors="coerce")
-                    - pd.to_numeric(spread_universe["index_rate"], errors="coerce")
-                ) * 100
-            else:
-                spread_universe["spread_bps"] = pd.NA
+            if "yield" in spread_universe.columns:
+                spread_universe["yield"] = pd.to_numeric(spread_universe["yield"], errors="coerce")
+            spread_universe = _add_source_spread_bps(spread_universe)
 
             spread_universe = spread_universe.dropna(subset=["trade_date", "spread_bps"])
             fig_spread_snapshot = go.Figure()
@@ -2902,11 +2962,15 @@ if advanced_group == "Core Evidence":
                 )
                 fig_spread_snapshot.update_xaxes(tickformat="%m/%d/%Y")
                 safe_plotly_chart(fig_spread_snapshot, width="stretch")
+                calc_preview = _build_spread_calculation_preview(spread_universe, limit=6)
+                if not calc_preview.empty:
+                    st.caption("Spread calculation preview: using the uploaded/source spread column.")
+                    safe_dataframe(calc_preview, width="stretch", hide_index=True, auto_collapse=False, max_rows=6)
                 render_spread_trend_readthrough(spread_universe, selected_issuer, snapshot_issuers)
             else:
-                st.info("No usable spread or index-rate data for the selected spread lines.")
+                st.info("No usable source spread data for the selected spread lines.")
         else:
-            st.info("Upload trades with issuer, trade date, yield, and spread/index-rate fields to build spread trends.")
+            st.info("Upload trades with issuer, trade date, and spread fields to build spread trends.")
 
     with st.container():
         st.markdown("<a id='trading-volume'></a>", unsafe_allow_html=True)
@@ -3007,8 +3071,9 @@ if advanced_group == "Core Evidence":
     snap_col_a, snap_col_b, snap_col_c = st.columns(3)
     with snap_col_a:
         _metric_source = market_df[market_df["issuer"] == selected_issuer].copy()
-        if not _metric_source.empty and "spread" in _metric_source.columns:
-            _spread_bps = pd.to_numeric(_metric_source["spread"], errors="coerce") * 100
+        if not _metric_source.empty and any(c in _metric_source.columns for c in ["source_spread_bps", "spread"]):
+            _metric_source = _add_source_spread_bps(_metric_source)
+            _spread_bps = pd.to_numeric(_metric_source["spread_bps"], errors="coerce")
             clean_metric_card("Primary Median Spread", "N/A" if _spread_bps.dropna().empty else f"{_spread_bps.median():.1f} bps", size="small")
         else:
             clean_metric_card("Primary Median Spread", "N/A", size="small")
@@ -3696,7 +3761,36 @@ This is useful because trade count alone can overstate liquidity when most activ
                     safe_dataframe(table_display, width="stretch", hide_index=True)
 
         st.subheader("3. Most Frequently Traded CUSIPs")
-        safe_plotly_chart(px.bar(liq.head(25), x="cusip", y="trade_count", color="liquidity_tier", title="Top 25 Most Frequently Traded CUSIPs"), width="stretch")
+        frequent_cusips = liq.sort_values("trade_count", ascending=False).head(25).copy()
+        frequent_cusips.insert(0, "Rank", range(1, len(frequent_cusips) + 1))
+        frequent_display_cols = [
+            "Rank", "cusip", "liquidity_tier", "trade_count", "recent_90d_trades", "active_months",
+            "latest_trade", "avg_yield", "total_trade_amount",
+        ]
+        frequent_display_cols = [c for c in frequent_display_cols if c in frequent_cusips.columns]
+        frequent_display = frequent_cusips[frequent_display_cols].copy()
+        rename_map = {
+            "cusip": "CUSIP",
+            "liquidity_tier": "Liquidity Tier",
+            "trade_count": "Trade Count",
+            "recent_90d_trades": "Recent 90D Trades",
+            "active_months": "Active Months",
+            "latest_trade": "Latest Trade",
+            "avg_yield": "Avg Yield",
+            "total_trade_amount": "Total Trade Amount",
+        }
+        frequent_display = frequent_display.rename(columns=rename_map)
+        if "Latest Trade" in frequent_display.columns:
+            frequent_display["Latest Trade"] = frequent_display["Latest Trade"].map(_fmt_date)
+        if "Avg Yield" in frequent_display.columns:
+            frequent_display["Avg Yield"] = pd.to_numeric(frequent_display["Avg Yield"], errors="coerce").map(
+                lambda x: "" if pd.isna(x) else f"{x:.3f}%"
+            )
+        if "Total Trade Amount" in frequent_display.columns:
+            frequent_display["Total Trade Amount"] = pd.to_numeric(
+                frequent_display["Total Trade Amount"], errors="coerce"
+            ).map(_fmt_mm)
+        safe_dataframe(frequent_display, width="stretch", hide_index=True, auto_collapse=False, max_rows=25)
 
         st.subheader("4. Trade Recency / Staleness")
         safe_plotly_chart(px.histogram(liq, x="days_since_last_trade", nbins=30, color="liquidity_tier", title="Distribution of Days Since Last Trade"), width="stretch")
