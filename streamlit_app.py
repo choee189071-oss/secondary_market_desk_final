@@ -1165,6 +1165,218 @@ def _build_spread_calculation_preview(df: pd.DataFrame, limit: int = 6) -> pd.Da
     return pd.DataFrame(rows)
 
 
+def _build_daily_spread_audit(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or not {"trade_date", "issuer", "spread_bps"}.issubset(df.columns):
+        return pd.DataFrame()
+    audit = df.copy()
+    audit["trade_date"] = pd.to_datetime(audit["trade_date"], errors="coerce").dt.normalize()
+    audit["spread_bps"] = pd.to_numeric(audit["spread_bps"], errors="coerce")
+    audit = audit.dropna(subset=["trade_date", "issuer", "spread_bps"])
+    if audit.empty:
+        return pd.DataFrame()
+
+    agg_map = {
+        "trade_count": ("spread_bps", "count"),
+        "spread_sum_bps": ("spread_bps", "sum"),
+        "avg_spread_bps": ("spread_bps", "mean"),
+        "min_spread_bps": ("spread_bps", "min"),
+        "max_spread_bps": ("spread_bps", "max"),
+    }
+    if "yield" in audit.columns:
+        audit["yield"] = pd.to_numeric(audit["yield"], errors="coerce")
+        agg_map["avg_yield"] = ("yield", "mean")
+    if "cusip" in audit.columns:
+        agg_map["cusip_count"] = ("cusip", "nunique")
+    if "_spread_raw_numeric" in audit.columns:
+        audit["_spread_raw_numeric"] = pd.to_numeric(audit["_spread_raw_numeric"], errors="coerce")
+        agg_map["avg_source_spread_column"] = ("_spread_raw_numeric", "mean")
+
+    daily = (
+        audit.groupby(["trade_date", "issuer"], as_index=False)
+        .agg(**agg_map)
+        .sort_values(["issuer", "trade_date"])
+    )
+    daily["daily_change_bps"] = daily.groupby("issuer")["avg_spread_bps"].diff()
+    daily["abs_avg_spread_bps"] = daily["avg_spread_bps"].abs()
+    daily["abs_daily_change_bps"] = daily["daily_change_bps"].abs()
+    daily["calculation"] = daily.apply(
+        lambda r: (
+            ""
+            if pd.isna(r.get("spread_sum_bps")) or pd.isna(r.get("trade_count")) or int(r.get("trade_count", 0) or 0) == 0
+            else f"{float(r['spread_sum_bps']):+.1f} bps / {int(r['trade_count'])}"
+        ),
+        axis=1,
+    )
+    return daily
+
+
+def _build_spread_audit_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    audit = df.copy()
+    if "trade_date" in audit.columns:
+        audit["trade_date"] = pd.to_datetime(audit["trade_date"], errors="coerce").dt.normalize()
+    if "spread_bps" in audit.columns:
+        audit["spread_bps"] = pd.to_numeric(audit["spread_bps"], errors="coerce")
+    preferred_cols = [
+        "trade_date", "issuer", "cusip", "maturity_bucket", "workbench_maturity_year",
+        "workbench_coupon", "coupon", "coupon_trade", "yield", "spread", "_spread_raw_numeric",
+        "_spread_multiplier", "source_spread_bps", "spread_bps", "price", "trade_amount",
+        "trade_type", "index", "index_rate", "description", "source_file",
+    ]
+    cols = [c for c in preferred_cols if c in audit.columns]
+    remaining = [c for c in audit.columns if c not in cols and not str(c).startswith("_")]
+    audit = audit[cols + remaining].copy()
+    rename_map = {
+        "trade_date": "Trade Date",
+        "issuer": "Issuer",
+        "cusip": "CUSIP",
+        "maturity_bucket": "Maturity",
+        "workbench_maturity_year": "Maturity Year Filter",
+        "workbench_coupon": "Coupon Filter",
+        "coupon": "Coupon",
+        "coupon_trade": "Trade Coupon",
+        "yield": "Yield",
+        "spread": "Spread Column",
+        "_spread_raw_numeric": "Source Spread Numeric",
+        "_spread_multiplier": "Spread Multiplier",
+        "source_spread_bps": "Source Spread bps",
+        "spread_bps": "Used Spread bps",
+        "price": "Price",
+        "trade_amount": "Trade Amount",
+        "trade_type": "Trade Type",
+        "index": "Index",
+        "index_rate": "Index Rate",
+        "description": "Description",
+        "source_file": "Source File",
+    }
+    audit = audit.rename(columns={k: v for k, v in rename_map.items() if k in audit.columns})
+    for col in ["Yield", "Spread Column", "Source Spread Numeric", "Source Spread bps", "Used Spread bps", "Price", "Index Rate"]:
+        if col in audit.columns:
+            audit[col] = pd.to_numeric(audit[col], errors="coerce").round(4)
+    if "Trade Amount" in audit.columns:
+        audit["Trade Amount"] = pd.to_numeric(audit["Trade Amount"], errors="coerce").round(0)
+    return audit
+
+
+def _format_daily_spread_audit(daily: pd.DataFrame) -> pd.DataFrame:
+    if daily.empty:
+        return pd.DataFrame()
+    out = daily.copy()
+    out = out.rename(
+        columns={
+            "trade_date": "Trade Date",
+            "issuer": "Issuer",
+            "trade_count": "Trades",
+            "cusip_count": "CUSIPs",
+            "avg_source_spread_column": "Avg Source Spread Column",
+            "spread_sum_bps": "Spread Sum",
+            "avg_spread_bps": "Daily Avg Spread",
+            "min_spread_bps": "Min Spread",
+            "max_spread_bps": "Max Spread",
+            "daily_change_bps": "Daily Change",
+            "avg_yield": "Avg Yield",
+            "calculation": "Calculation",
+        }
+    )
+    keep = [
+        "Trade Date", "Issuer", "Trades", "CUSIPs", "Avg Yield", "Avg Source Spread Column",
+        "Spread Sum", "Calculation", "Daily Avg Spread", "Min Spread", "Max Spread", "Daily Change",
+    ]
+    out = out[[c for c in keep if c in out.columns]].copy()
+    for col in ["Avg Yield", "Avg Source Spread Column", "Spread Sum", "Daily Avg Spread", "Min Spread", "Max Spread", "Daily Change"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").round(2)
+    return out
+
+
+def _render_spread_row_audit(spread_df: pd.DataFrame, selected_issuer: str):
+    daily = _build_daily_spread_audit(spread_df)
+    if daily.empty:
+        return
+
+    requested_dates = pd.to_datetime(["2026-02-06", "2026-03-11"], errors="coerce").normalize()
+    requested_daily = daily[daily["trade_date"].isin(requested_dates)].copy()
+    daily_rank = daily.copy()
+    daily_rank["outlier_score"] = daily_rank[["abs_avg_spread_bps", "abs_daily_change_bps"]].max(axis=1)
+    outlier_daily = daily_rank.sort_values("outlier_score", ascending=False).head(12).drop(columns=["outlier_score"])
+    audit_dates = pd.concat([requested_daily[["trade_date"]], outlier_daily[["trade_date"]]], ignore_index=True)
+    audit_dates = sorted(audit_dates["trade_date"].dropna().unique().tolist())
+
+    raw_rows = _build_spread_audit_rows(spread_df)
+    focus_rows = raw_rows.copy()
+    if audit_dates and "Trade Date" in focus_rows.columns:
+        row_dates = pd.to_datetime(focus_rows["Trade Date"], errors="coerce").dt.normalize()
+        focus_rows = focus_rows[row_dates.isin(audit_dates)].copy()
+
+    selected_daily = daily[daily["issuer"].astype(str) == str(selected_issuer)].copy()
+    st.markdown("##### Spread Row Audit")
+    st.caption(
+        "This audit uses the same active Section 2 + Section 6 scope as the spread chart. "
+        "The chart point is the daily average of the source spread rows shown here. "
+        "Use the CSV downloads to share the exact trade rows behind the 20Y / 5% coupon scenario."
+    )
+
+    if not requested_daily.empty:
+        st.markdown("**Requested dates: 02/06/2026 and 03/11/2026**")
+        safe_dataframe(
+            _format_daily_spread_audit(requested_daily),
+            width="stretch",
+            hide_index=True,
+            auto_collapse=False,
+            max_rows=20,
+        )
+
+    st.markdown("**Largest spread / jump days in active scope**")
+    safe_dataframe(
+        _format_daily_spread_audit(outlier_daily),
+        width="stretch",
+        hide_index=True,
+        auto_collapse=False,
+        max_rows=12,
+    )
+
+    if not focus_rows.empty:
+        st.markdown("**Underlying trade rows for requested/outlier dates**")
+        safe_dataframe(
+            focus_rows,
+            width="stretch",
+            hide_index=True,
+            auto_collapse=False,
+            max_rows=200,
+        )
+
+    with st.expander("All daily average points used in the spread chart", expanded=False):
+        safe_dataframe(
+            _format_daily_spread_audit(selected_daily if not selected_daily.empty else daily),
+            width="stretch",
+            hide_index=True,
+            auto_collapse=False,
+            max_rows=500,
+        )
+
+    with st.expander("All raw trade rows used in the spread chart", expanded=False):
+        safe_dataframe(raw_rows, width="stretch", hide_index=True, auto_collapse=False, max_rows=1000)
+
+    dl_col_a, dl_col_b = st.columns(2)
+    with dl_col_a:
+        st.download_button(
+            "Download spread audit rows CSV",
+            data=raw_rows.to_csv(index=False).encode("utf-8"),
+            file_name="spread_audit_trade_rows.csv",
+            mime="text/csv",
+            key="download_spread_audit_rows",
+        )
+    with dl_col_b:
+        st.download_button(
+            "Download daily spread audit CSV",
+            data=_format_daily_spread_audit(daily).to_csv(index=False).encode("utf-8"),
+            file_name="spread_audit_daily_average.csv",
+            mime="text/csv",
+            key="download_spread_audit_daily",
+        )
+
+
 def _fmt_month(x) -> str:
     try:
         return pd.to_datetime(x).strftime("%b %Y")
@@ -2998,6 +3210,10 @@ if advanced_group == "Core Evidence":
                 if not calc_preview.empty:
                     st.caption("Spread calculation preview: daily average of the uploaded/source spread column.")
                     safe_dataframe(calc_preview, width="stretch", hide_index=True, auto_collapse=False, max_rows=6)
+                _render_spread_row_audit(
+                    selected_spread_df if not selected_spread_df.empty else spread_universe,
+                    selected_issuer,
+                )
                 render_spread_trend_readthrough(spread_universe, selected_issuer, snapshot_issuers)
             else:
                 st.info("No usable source spread data for the selected spread lines.")
